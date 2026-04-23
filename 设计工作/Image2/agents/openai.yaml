@@ -1,0 +1,6 @@
+interface:
+  display_name: "Image2"
+  short_description: "自然语言生成图片并直接显示"
+  default_prompt: "使用 $Image2 生成并显示一张图片："
+policy:
+  allow_implicit_invocation: true
