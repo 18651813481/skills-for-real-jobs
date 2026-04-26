@@ -1,0 +1,6 @@
+interface:
+  display_name: "slide maker"
+  short_description: "把资料、大纲或自然语言需求生成学术 PPTX，支持 NotebookLM-style 全图像化 deck"
+  default_prompt: "使用 $slide maker 把资料、大纲或自然语言需求生成 PPTX，可选择可编辑模式或 NotebookLM-style 全图像化模式："
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Build a NotebookLM-style image deck from full-slide images.
+
+The script keeps generation and authoring separate:
+- Image2 or another image route creates one 16:9 image per slide.
+- This utility lays each image full-bleed into an editable PPTX container.
+- Authoring metadata stays in JSON/Markdown sidecars for revision and audit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+SLIDE_W = 13.333333
+SLIDE_H = 7.5
+SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
+
+
+@dataclass
+class ImageInfo:
+    path: Path
+    width: int
+    height: int
+    ratio: float
+    ratio_ok: bool
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build a PPTX where each slide is a full-bleed image."
+    )
+    parser.add_argument("--images-dir", required=True, help="Directory with slide images.")
+    parser.add_argument("--output", required=True, help="Output .pptx path.")
+    parser.add_argument("--title", default="Image Deck", help="Presentation title metadata.")
+    parser.add_argument(
+        "--notes-json",
+        help="Optional JSON file with notes. Accepts a list or {slides:[...]} records.",
+    )
+    parser.add_argument(
+        "--source-map",
+        help="Optional source_map.json copied into the QA manifest reference.",
+    )
+    parser.add_argument(
+        "--qa-report",
+        help="Optional QA report path. Defaults to <output-dir>/qa-report.json.",
+    )
+    parser.add_argument(
+        "--montage",
+        help="Optional SVG contact sheet path for quick visual review.",
+    )
+    parser.add_argument(
+        "--allow-non-16x9",
+        action="store_true",
+        help="Warn instead of failing when images are not approximately 16:9.",
+    )
+    parser.add_argument(
+        "--node",
+        help="Optional Node.js executable. Defaults to bundled Codex runtime or PATH.",
+    )
+    parser.add_argument(
+        "--node-modules",
+        help="Optional node_modules path containing pptxgenjs.",
+    )
+    return parser.parse_args()
+
+
+def natural_key(path: Path) -> list[Any]:
+    parts = re.split(r"(\d+)", path.name)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def find_images(images_dir: Path) -> list[Path]:
+    if not images_dir.exists() or not images_dir.is_dir():
+        raise SystemExit(f"images directory not found: {images_dir}")
+    images = [
+        p
+        for p in images_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
+    ]
+    images.sort(key=natural_key)
+    if not images:
+        raise SystemExit(f"no supported slide images found in: {images_dir}")
+    return images
+
+
+def png_size(path: Path) -> tuple[int, int] | None:
+    with path.open("rb") as fh:
+        header = fh.read(24)
+    if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", header[16:24])
+    return None
+
+
+def jpeg_size(path: Path) -> tuple[int, int] | None:
+    with path.open("rb") as fh:
+        data = fh.read()
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i < len(data):
+        while i < len(data) and data[i] == 0xFF:
+            i += 1
+        if i >= len(data):
+            break
+        marker = data[i]
+        i += 1
+        if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+            continue
+        if i + 2 > len(data):
+            break
+        segment_len = struct.unpack(">H", data[i : i + 2])[0]
+        if segment_len < 2 or i + segment_len > len(data):
+            break
+        if marker in {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }:
+            if segment_len >= 7:
+                height = struct.unpack(">H", data[i + 3 : i + 5])[0]
+                width = struct.unpack(">H", data[i + 5 : i + 7])[0]
+                return width, height
+        i += segment_len
+    return None
+
+
+def image_size(path: Path) -> tuple[int, int]:
+    suffix = path.suffix.lower()
+    size = png_size(path) if suffix == ".png" else jpeg_size(path)
+    if not size:
+        raise SystemExit(f"cannot read image dimensions: {path}")
+    return size
+
+
+def inspect_images(paths: list[Path]) -> list[ImageInfo]:
+    infos: list[ImageInfo] = []
+    for path in paths:
+        width, height = image_size(path)
+        ratio = width / height
+        ratio_ok = abs(ratio - 16 / 9) <= 0.02
+        infos.append(ImageInfo(path=path, width=width, height=height, ratio=ratio, ratio_ok=ratio_ok))
+    return infos
+
+
+def load_notes(path: str | None, count: int) -> list[str]:
+    if not path:
+        return [""] * count
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("slides"), list):
+        records = data["slides"]
+    elif isinstance(data, list):
+        records = data
+    else:
+        raise SystemExit("notes JSON must be a list or an object with a slides list")
+    notes: list[str] = []
+    for record in records:
+        if isinstance(record, str):
+            notes.append(record)
+        elif isinstance(record, dict):
+            notes.append(str(record.get("speaker_notes") or record.get("notes") or ""))
+        else:
+            notes.append("")
+    if len(notes) < count:
+        notes.extend([""] * (count - len(notes)))
+    return notes[:count]
+
+
+def find_node(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    bundled = Path(
+        "/Users/fly/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+    )
+    if bundled.exists():
+        return str(bundled)
+    found = shutil.which("node")
+    if found:
+        return found
+    raise SystemExit("Node.js not found; pass --node or install Codex workspace dependencies")
+
+
+def find_node_modules(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    bundled = Path(
+        "/Users/fly/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"
+    )
+    if (bundled / "pptxgenjs").exists():
+        return str(bundled)
+    return ""
+
+
+def build_pptx(
+    *,
+    node: str,
+    node_modules: str,
+    output: Path,
+    title: str,
+    images: list[ImageInfo],
+    notes: list[str],
+) -> None:
+    payload = {
+        "output": str(output),
+        "title": title,
+        "slideW": SLIDE_W,
+        "slideH": SLIDE_H,
+        "slides": [
+            {"image": str(info.path), "notes": notes[idx]}
+            for idx, info in enumerate(images)
+        ],
+    }
+    js = r"""
+const fs = require('fs');
+const path = require('path');
+const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const pptxgen = require('pptxgenjs');
+
+const pptx = new pptxgen();
+pptx.layout = 'LAYOUT_WIDE';
+pptx.author = 'slide maker';
+pptx.company = 'Codex';
+pptx.subject = 'NotebookLM-style image deck';
+pptx.title = payload.title;
+pptx.lang = 'zh-CN';
+pptx.theme = {
+  headFontFace: 'Aptos Display',
+  bodyFontFace: 'Aptos',
+  lang: 'zh-CN'
+};
+pptx.defineLayout({ name: 'CUSTOM_WIDE', width: payload.slideW, height: payload.slideH });
+pptx.layout = 'CUSTOM_WIDE';
+
+for (const item of payload.slides) {
+  const slide = pptx.addSlide();
+  slide.background = { color: 'FFFFFF' };
+  slide.addImage({ path: item.image, x: 0, y: 0, w: payload.slideW, h: payload.slideH });
+  if (item.notes && item.notes.trim()) {
+    slide.addNotes(item.notes);
+  }
+}
+
+fs.mkdirSync(path.dirname(payload.output), { recursive: true });
+pptx.writeFile({ fileName: payload.output });
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        payload_path = Path(tmp) / "payload.json"
+        script_path = Path(tmp) / "build.js"
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        script_path.write_text(js, encoding="utf-8")
+        env = os.environ.copy()
+        if node_modules:
+            env["NODE_PATH"] = node_modules
+        subprocess.run([node, str(script_path), str(payload_path)], check=True, env=env)
+
+
+def write_montage(path: Path, images: list[ImageInfo], cols: int = 4) -> None:
+    thumb_w = 320
+    thumb_h = 180
+    gap = 24
+    label_h = 30
+    rows = (len(images) + cols - 1) // cols
+    width = cols * thumb_w + (cols + 1) * gap
+    height = rows * (thumb_h + label_h) + (rows + 1) * gap
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="#f5f7f8"/>',
+    ]
+    for idx, info in enumerate(images):
+        row, col = divmod(idx, cols)
+        x = gap + col * (thumb_w + gap)
+        y = gap + row * (thumb_h + label_h + gap)
+        href = info.path.as_uri()
+        parts.append(f'<rect x="{x-1}" y="{y-1}" width="{thumb_w+2}" height="{thumb_h+2}" rx="4" fill="#d0d7de"/>')
+        parts.append(
+            f'<image href="{href}" x="{x}" y="{y}" width="{thumb_w}" height="{thumb_h}" preserveAspectRatio="xMidYMid slice"/>'
+        )
+        parts.append(
+            f'<text x="{x}" y="{y + thumb_h + 22}" font-size="16" font-family="Arial, sans-serif" fill="#1f2933">Slide {idx + 1:02d}</text>'
+        )
+    parts.append("</svg>")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(parts), encoding="utf-8")
+
+
+def write_qa_report(
+    path: Path,
+    *,
+    output: Path,
+    images: list[ImageInfo],
+    montage: Path | None,
+    source_map: str | None,
+    non_16x9: list[ImageInfo],
+) -> None:
+    report = {
+        "pptx": str(output),
+        "exists": output.exists(),
+        "size_bytes": output.stat().st_size if output.exists() else 0,
+        "slide_count": len(images),
+        "image_count": len(images),
+        "all_images_16x9": not non_16x9,
+        "non_16x9_images": [
+            {
+                "path": str(info.path),
+                "width": info.width,
+                "height": info.height,
+                "ratio": round(info.ratio, 4),
+            }
+            for info in non_16x9
+        ],
+        "montage_path": str(montage) if montage else None,
+        "source_map_path": source_map,
+        "editable_signal": "Image deck: each slide is a full-slide raster image; text is not natively editable.",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def main() -> int:
+    args = parse_args()
+    output = Path(args.output).expanduser().resolve()
+    image_paths = find_images(Path(args.images_dir).expanduser().resolve())
+    images = inspect_images(image_paths)
+    non_16x9 = [info for info in images if not info.ratio_ok]
+    if non_16x9 and not args.allow_non_16x9:
+        bad = "\n".join(
+            f"- {info.path} ({info.width}x{info.height}, ratio={info.ratio:.4f})"
+            for info in non_16x9
+        )
+        raise SystemExit(f"non-16:9 slide images found; pass --allow-non-16x9 to continue:\n{bad}")
+
+    notes = load_notes(args.notes_json, len(images))
+    node = find_node(args.node)
+    node_modules = find_node_modules(args.node_modules)
+    build_pptx(
+        node=node,
+        node_modules=node_modules,
+        output=output,
+        title=args.title,
+        images=images,
+        notes=notes,
+    )
+
+    montage_path = Path(args.montage).expanduser().resolve() if args.montage else None
+    if montage_path:
+        write_montage(montage_path, images)
+
+    qa_path = (
+        Path(args.qa_report).expanduser().resolve()
+        if args.qa_report
+        else output.parent / "qa-report.json"
+    )
+    write_qa_report(
+        qa_path,
+        output=output,
+        images=images,
+        montage=montage_path,
+        source_map=args.source_map,
+        non_16x9=non_16x9,
+    )
+
+    print(
+        json.dumps(
+            {
+                "pptx": str(output),
+                "slide_count": len(images),
+                "image_count": len(images),
+                "qa_report": str(qa_path),
+                "montage_path": str(montage_path) if montage_path else None,
+                "all_images_16x9": not non_16x9,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
