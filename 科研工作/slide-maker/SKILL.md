@@ -148,6 +148,7 @@ Required authoring artifacts:
 - `authoring/style_spec.json`: style route and exact visual system for the current deck.
 - `authoring/slide_narrative.md`: human-readable slide list, thesis, audience shift, one job per slide, and revision notes.
 - `authoring/page_prompts.json`: one record per slide with `slide_number`, `slide_job`, `page_type`, `page_text`, `visual_format`, `visual_metaphor`, `visual_brief`, `image_prompt`, and `speaker_notes`.
+- `authoring/image_manifest.json`: one record per generated slide image proving the actual Image2 route, copied image path, original generated image path, and prompt reference. This file is mandatory for default image decks.
 - `authoring/source_map.json`: source chunks or file sections used by each slide, plus caveats and evidence status.
 
 Page planning rules:
@@ -166,6 +167,9 @@ Image generation rules:
 - Use `--quality high` for cover and important visual pages when budget allows.
 - Use `--filename-prefix` with zero-padded slide numbers, for example `slide-01`, `slide-02`.
 - Save Image2 manifests next to the images; do not include API keys, Authorization headers, or raw `b64_json` in authoring files.
+- For built-in membership mode, after every `image_gen` generation, copy the selected generated file into `images/slide-XX.png` and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
+- For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
+- Never create or run a local full-slide rendering script as a substitute for Image2. A Python/PIL, SVG, HTML/canvas, matplotlib, or PPT screenshot generator may only be used for deterministic source charts or explicit user-approved fallback, not for the default slide page images.
 
 Assembly command:
 
@@ -175,9 +179,12 @@ python3 /path/to/slide-maker/scripts/build_image_deck.py \
   --output "/absolute/path/to/workspace/deck_image-deck.pptx" \
   --title "Deck title" \
   --notes-json "/absolute/path/to/workspace/authoring/page_prompts.json" \
+  --image-manifest "/absolute/path/to/workspace/authoring/image_manifest.json" \
   --source-map "/absolute/path/to/workspace/authoring/source_map.json" \
   --montage "/absolute/path/to/workspace/rendered/montage.svg"
 ```
+
+The assembly script must fail if `--image-manifest` is missing or if the manifest route is not `codex_builtin_imagegen` or `tokenlane_image2`. Use `--allow-non-image2` only after the user explicitly approves a non-Image2 fallback.
 
 Revision rules:
 
@@ -225,12 +232,13 @@ At minimum, check:
 - `.pptx` exists and is non-empty.
 - PPTX package can be inspected or unzipped.
 - Slide count matches the requested plan.
+- `authoring/image_manifest.json` exists and has one record per slide image.
 - Rendered PNG previews exist when rendering tooling is available.
 - Chinese text is not garbled.
 - No text overflow, clipped titles, bottom cropping, or unreadable small labels.
 - No overlapping text or images.
 - AI images are clear enough and not used as fake data charts.
-- Default image decks must have `image_route` equal to `codex_builtin_imagegen` or `tokenlane_image2`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation.
+- Default image decks must have `image_route` equal to `codex_builtin_imagegen` or `tokenlane_image2`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation. The QA report must include `image_route`, `image_route_ok`, and `image_manifest_path`.
 - For default image decks, verify that slide count equals image count and narrative page count, every image is 16:9, the montage exists, and the final response says the deck is image-based rather than text-editable.
 - For explicit editable decks, verify that native text, shapes, charts, and tables remain editable where appropriate.
 - For source-grounded decks, verify that `source_map.json` covers the main claims and that unsupported claims are removed or marked as concept draft.
@@ -243,6 +251,7 @@ Final response should include:
 
 - PPTX path.
 - Authoring source paths when available: `content_brief.json`, `deck_outline.json`, `style_spec.json`, `slide_narrative.md`, `source_map.json`, and `page_prompts.json`.
+- `image_manifest.json` path and actual `image_route`.
 - Rendered slide preview path or directory when available.
 - Montage path when available.
 - Image asset path and route.
