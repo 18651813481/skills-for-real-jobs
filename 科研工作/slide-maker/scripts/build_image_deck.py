@@ -73,7 +73,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Explicit fallback escape hatch. Allows building from images without "
-            "an Image2 manifest; the QA report will mark image_route_ok=false."
+            "an Image2 manifest only when --non-image2-approval is also provided; "
+            "the QA report will mark image_route_ok=false."
+        ),
+    )
+    parser.add_argument(
+        "--non-image2-approval",
+        help=(
+            "Required with --allow-non-image2. JSON approval file containing "
+            '{"approved": true} for an explicitly user-approved fallback.'
         ),
     )
     parser.add_argument(
@@ -211,8 +219,29 @@ def load_notes(path: str | None, count: int) -> list[str]:
     return notes[:count]
 
 
-def load_image_manifest(path: str | None, images: list[ImageInfo], allow_non_image2: bool) -> ImageManifest:
+def require_non_image2_approval(path: str | None) -> Path:
+    if not path:
+        raise SystemExit(
+            "--allow-non-image2 requires --non-image2-approval pointing to "
+            "authoring/non_image2_approval.json"
+        )
+    approval_path = Path(path).expanduser().resolve()
+    if not approval_path.exists():
+        raise SystemExit(f"non-Image2 approval file not found: {approval_path}")
+    data = json.loads(approval_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("approved") is not True:
+        raise SystemExit('non-Image2 approval file must contain {"approved": true}')
+    return approval_path
+
+
+def load_image_manifest(
+    path: str | None,
+    images: list[ImageInfo],
+    allow_non_image2: bool,
+    non_image2_approval: str | None,
+) -> ImageManifest:
     allowed_routes = {"codex_builtin_imagegen", "tokenlane_image2"}
+    approval_path = require_non_image2_approval(non_image2_approval) if allow_non_image2 else None
     if not path:
         if allow_non_image2:
             return ImageManifest(
@@ -220,7 +249,10 @@ def load_image_manifest(path: str | None, images: list[ImageInfo], allow_non_ima
                 route="none",
                 route_ok=False,
                 slide_count=0,
-                warnings=["missing image_manifest.json; non-Image2 fallback was explicitly allowed"],
+                warnings=[
+                    "missing image_manifest.json; non-Image2 fallback was explicitly approved",
+                    f"approval_file={approval_path}",
+                ],
             )
         raise SystemExit(
             "image manifest is required for slide-maker image decks. "
@@ -248,6 +280,8 @@ def load_image_manifest(path: str | None, images: list[ImageInfo], allow_non_ima
             f"invalid image_route in manifest: {route or '<empty>'}. "
             "Expected codex_builtin_imagegen or tokenlane_image2."
         )
+    if not route_ok and allow_non_image2:
+        warnings.append(f"non-Image2 route explicitly approved: {route or '<empty>'}")
 
     if len(records) != len(images):
         raise SystemExit(
@@ -458,7 +492,12 @@ def main() -> int:
         )
         raise SystemExit(f"non-16:9 slide images found; pass --allow-non-16x9 to continue:\n{bad}")
 
-    manifest = load_image_manifest(args.image_manifest, images, args.allow_non_image2)
+    manifest = load_image_manifest(
+        args.image_manifest,
+        images,
+        args.allow_non_image2,
+        args.non_image2_approval,
+    )
     notes = load_notes(args.notes_json, len(images))
     node = find_node(args.node)
     node_modules = find_node_modules(args.node_modules)
@@ -505,7 +544,7 @@ def main() -> int:
             ensure_ascii=False,
         )
     )
-    return 0
+    return 0 if manifest.route_ok else 2
 
 
 if __name__ == "__main__":

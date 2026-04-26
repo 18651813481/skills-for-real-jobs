@@ -11,6 +11,7 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 
 - Default to an Image2/gpt-image-2 full-page image deck: every slide is designed as one full-bleed 16:9 image and wrapped in a `.pptx` container. Do not prioritize native text editability unless the user explicitly asks for an editable deck.
 - For `source-to-deck`, always run the source analysis pipeline before writing slides: segment the material, identify relevant and excluded sections, extract claims/evidence/numbers/stakeholders/gaps, then create a structured outline. Do not turn source paragraphs directly into slides.
+- For outline-to-deck, do not pass the outline text directly into slide images. First normalize each slide into `message_brief`, `visible_text`, `speaker_notes`, and `visual_brief`; then generate Image2 prompts from the visual brief. Dense outlines must be compressed, and sparse outlines must be semantically expanded.
 - In the default image deck mode, clearly report that visual quality is prioritized and slide text is not natively editable. If the user explicitly asks for NotebookLM-style, full-image, image deck, visual-first, or "全图像化" output, treat it as confirmation of the default Image2 route and be more aggressive with visual composition.
 - A locally rendered full-slide PNG/JPG is not a substitute for Image2. Do not satisfy the default image-deck requirement by rendering HTML, SVG, canvas, matplotlib, PIL, PPT screenshots, or deterministic local layouts into images unless the user explicitly asks for deterministic rendering or editable/typographic precision over Image2 design.
 - For default deck generation, `image_route: none` is a QA failure. Use `codex_builtin_imagegen` or `tokenlane_image2`, or stop and ask before producing a non-Image2 deck.
@@ -63,6 +64,8 @@ Load these only when relevant:
    - one job per slide
    - visual asset plan
    - QA plan
+   - presentation intent: what the audience should understand, believe, compare, decide, or remember
+   - visual explanation strategy: how images, spatial hierarchy, diagrams, scenes, and metaphors will teach the intent
 6. Choose backend:
    - Prefer installed `slides` skill if present.
    - Otherwise use `Presentations`.
@@ -98,8 +101,14 @@ Load these only when relevant:
 - Preserve the user's hierarchy, but do not mechanically make one bullet into one slide.
 - Detect sections, nested bullets, chronology, contrast, cause-effect, and evidence groups.
 - Every slide must have one slide job, such as cover, agenda, problem, method, finding, evidence, workflow, comparison, implication, summary, Q&A, or appendix.
-- If a bullet list is too dense, split it or convert it into a process, matrix, timeline, table, or speaker notes.
+- If a bullet list is too dense, split it or convert it into a process, matrix, timeline, table, or speaker notes. Do not switch to local deterministic rendering just because the outline has too much Chinese text.
+- If the outline is sparse, infer the missing visual logic from the slide job, audience, deck thesis, adjacent slides, and style spec. Expand into a concrete `visual_brief` and `visual_metaphor`; do not produce a generic background with only the provided short text.
 - Keep Chinese academic wording rigorous, but reduce slide text to presentation-safe phrasing.
+- For every slide, write the normalized fields before image generation:
+  - `message_brief`: one sentence explaining what the slide must make the audience understand.
+  - `visible_text`: one large title plus at most one subtitle, 2-4 labels, or 1-3 big numbers.
+  - `speaker_notes`: the detailed original outline content and caveats.
+  - `visual_brief`: a specific scene, diagram, workflow, comparison, metaphor, or evidence view that teaches the message.
 
 ## Chat-to-Deck Rules
 
@@ -126,6 +135,14 @@ If the user says to proceed without answering, default to:
 Load `references/notebooklm_image_deck.md` and `references/style_specs.md`.
 
 Use this mode by default for new deck generation. The goal is to approximate NotebookLM's polished raster-slide look, or the user's requested visual language, while keeping source-grounding and local file control. The visual style itself is not global: Apple/keynote, NotebookLM, academic clean, formal report, and other styles are still selected per prompt and source.
+
+NotebookLM-like intelligence requirement:
+
+- Treat source material, outlines, or brief text as raw material, not as slide copy.
+- First infer the presentation intent: audience, purpose, decision context, narrative arc, and what each slide must make clearer.
+- Then redesign each slide as a visual explanation: choose a page type, visual metaphor, spatial structure, key objects, relationships, and emotional tone.
+- If the input is long, synthesize and compress; if the input is short, infer the missing visual logic and enrich it from the deck thesis and adjacent slides.
+- Never make a normal text layout and then decorate it. Every Image2 prompt must describe the designed visual argument, not just the words to place on a slide.
 
 Default Image2 image deck behavior:
 
@@ -156,6 +173,10 @@ Page planning rules:
 - Keep page text short. Image models are unreliable with dense small text, so use large titles, short labels, and visual hierarchy.
 - Put factual detail, caveats, references, and long bullets into speaker notes and `source_map.json`, not into the image prompt.
 - Compose each image prompt from `slide_job + page_text + visual_format + visual_metaphor + layout_grammar + style_spec`. Do not prompt with only a generic style phrase such as "NotebookLM style" or "Apple style".
+- For every slide, `visual_brief` must answer: what is being explained, what visual object or scene carries the explanation, how the audience's understanding changes, and why this visual fits the report context.
+- The image prompt must include both semantic expansion and text reduction:
+  - Dense input: compress visible text, move the rest to notes, and ask Image2 for a visual explanation of the condensed message.
+  - Sparse input: expand the meaning into concrete visual objects, relationships, spatial hierarchy, and scene details based on audience and deck narrative.
 - Use fixed page types where possible: `big_idea`, `source_quote`, `concept_map`, `timeline`, `comparison`, `workflow`, `metrics`, `risk_next_step`, and `closing`.
 - Do not ask Image2 to fabricate statistical charts, axes, exact tables, logos, signatures, citations, or precise numeric plots. Use conceptual visuals for those pages, and preserve exact facts in notes.
 - Use a shared style lock after the first 1-2 pages: visual language, palette, typography mood, lighting, margin style, and icon/diagram treatment. Reuse it in every page prompt to reduce style drift.
@@ -185,6 +206,20 @@ python3 /path/to/slide-maker/scripts/build_image_deck.py \
 ```
 
 The assembly script must fail if `--image-manifest` is missing or if the manifest route is not `codex_builtin_imagegen` or `tokenlane_image2`. Use `--allow-non-image2` only after the user explicitly approves a non-Image2 fallback.
+
+Final validation command:
+
+```bash
+python3 /path/to/slide-maker/scripts/validate_image_deck.py \
+  --pptx "/absolute/path/to/workspace/deck_image-deck.pptx" \
+  --images-dir "/absolute/path/to/workspace/images" \
+  --page-prompts "/absolute/path/to/workspace/authoring/page_prompts.json" \
+  --source-map "/absolute/path/to/workspace/authoring/source_map.json" \
+  --image-manifest "/absolute/path/to/workspace/authoring/image_manifest.json" \
+  --qa-report "/absolute/path/to/workspace/qa-report.json"
+```
+
+Do not deliver a default image deck unless `validate_image_deck.py` exits successfully and the QA report has `valid: true` and `image_route_ok: true`.
 
 Revision rules:
 
@@ -233,12 +268,14 @@ At minimum, check:
 - PPTX package can be inspected or unzipped.
 - Slide count matches the requested plan.
 - `authoring/image_manifest.json` exists and has one record per slide image.
+- `validate_image_deck.py` exits successfully and writes `valid: true`.
 - Rendered PNG previews exist when rendering tooling is available.
 - Chinese text is not garbled.
 - No text overflow, clipped titles, bottom cropping, or unreadable small labels.
 - No overlapping text or images.
 - AI images are clear enough and not used as fake data charts.
 - Default image decks must have `image_route` equal to `codex_builtin_imagegen` or `tokenlane_image2`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation. The QA report must include `image_route`, `image_route_ok`, and `image_manifest_path`.
+- `page_prompts.json` must show that dense outline text was compressed and sparse outline text was expanded into a concrete visual brief; prompts that only repeat user bullets or only ask for a generic background fail QA.
 - For default image decks, verify that slide count equals image count and narrative page count, every image is 16:9, the montage exists, and the final response says the deck is image-based rather than text-editable.
 - For explicit editable decks, verify that native text, shapes, charts, and tables remain editable where appropriate.
 - For source-grounded decks, verify that `source_map.json` covers the main claims and that unsupported claims are removed or marked as concept draft.
