@@ -100,4 +100,7 @@ If generated Chinese text is garbled or too small:
 1. reduce visible text;
 2. regenerate only that slide with the same style lock;
 3. move detail into speaker notes;
-4. if exact text is mission-critical, use editable PPTX text instead of full-image text.
+4. do not switch to local deterministic full-slide rendering as a silent workaround;
+5. if exact text is mission-critical, ask the user before switching to editable PPTX text or deterministic local rendering.
+
+For default slide-maker decks, `image_route: none` means the image-deck requirement was not met unless the user explicitly approved that fallback before generation.

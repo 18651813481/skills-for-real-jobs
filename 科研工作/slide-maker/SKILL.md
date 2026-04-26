@@ -12,6 +12,8 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 - Default to an Image2/gpt-image-2 full-page image deck: every slide is designed as one full-bleed 16:9 image and wrapped in a `.pptx` container. Do not prioritize native text editability unless the user explicitly asks for an editable deck.
 - For `source-to-deck`, always run the source analysis pipeline before writing slides: segment the material, identify relevant and excluded sections, extract claims/evidence/numbers/stakeholders/gaps, then create a structured outline. Do not turn source paragraphs directly into slides.
 - In the default image deck mode, clearly report that visual quality is prioritized and slide text is not natively editable. If the user explicitly asks for NotebookLM-style, full-image, image deck, visual-first, or "全图像化" output, treat it as confirmation of the default Image2 route and be more aggressive with visual composition.
+- A locally rendered full-slide PNG/JPG is not a substitute for Image2. Do not satisfy the default image-deck requirement by rendering HTML, SVG, canvas, matplotlib, PIL, PPT screenshots, or deterministic local layouts into images unless the user explicitly asks for deterministic rendering or editable/typographic precision over Image2 design.
+- For default deck generation, `image_route: none` is a QA failure. Use `codex_builtin_imagegen` or `tokenlane_image2`, or stop and ask before producing a non-Image2 deck.
 - Do not make any single visual style the global default. Follow the user's style prompt for the current deck; if no style is specified, infer the most suitable style from the source material, audience, purpose, and viewing context.
 - If the current prompt explicitly asks for "Apple 发布会风格", "Apple keynote style", "发布会风格", "keynote", "premium launch", "视觉精致", or otherwise prioritizes cinematic/polished full-page visuals, treat that current deck as visual-first and use the NotebookLM-style image deck workflow with Image2/gpt-image-2 by default, unless the user explicitly says the slide text must remain natively editable. This is prompt-scoped and must not carry over to unrelated documents.
 - Do not use screenshots, HTML, PDF, or a webpage as the main deliverable. The default deliverable is a `.pptx` image deck; use native editable `.pptx` only when the user explicitly asks for editable text/shapes/charts.
@@ -131,6 +133,7 @@ Default Image2 image deck behavior:
 - Keep page text extremely short: one large title plus at most one subtitle, 2-4 labels, or 1-3 big numbers.
 - Let Image2 handle the whole page design: composition, lighting, diagram language, spatial hierarchy, illustration, and visual metaphor.
 - Do not constrain the deck around native text editability; preserve source detail in speaker notes and authoring artifacts.
+- Do not replace Image2 with local deterministic rendering to improve Chinese text accuracy. First reduce visible text and regenerate with Image2; if exact text is mission-critical, ask the user before switching to editable/local rendering.
 
 Prompt-scoped Apple/keynote-style behavior:
 
@@ -213,7 +216,7 @@ Record the actual image path and `image_route` in the final response:
 
 - `tokenlane_image2`
 - `codex_builtin_imagegen`
-- `none`
+- `none` only when the user explicitly approved a non-Image2 fallback or every Image2 route failed after being attempted and reported.
 
 ## QA Requirements
 
@@ -227,6 +230,7 @@ At minimum, check:
 - No text overflow, clipped titles, bottom cropping, or unreadable small labels.
 - No overlapping text or images.
 - AI images are clear enough and not used as fake data charts.
+- Default image decks must have `image_route` equal to `codex_builtin_imagegen` or `tokenlane_image2`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation.
 - For default image decks, verify that slide count equals image count and narrative page count, every image is 16:9, the montage exists, and the final response says the deck is image-based rather than text-editable.
 - For explicit editable decks, verify that native text, shapes, charts, and tables remain editable where appropriate.
 - For source-grounded decks, verify that `source_map.json` covers the main claims and that unsupported claims are removed or marked as concept draft.
@@ -250,6 +254,6 @@ Final response should include:
 
 - If official `slides` skill is unavailable, use `Presentations` and report that OpenAI curated slides was not available locally.
 - If Image2 fails but built-in image generation is available, use built-in image generation.
-- If both image routes fail, still produce the deck without AI images and report the fallback.
+- If both image routes fail, ask before producing the deck without AI images. Do not silently switch to deterministic local rendering for the main deck.
 - If source material is insufficient for factual claims, ask for the source or mark the deck as a concept draft.
 - If the user requests NotebookLM specifically, explain that this workflow avoids NotebookLM and stays in Codex.
