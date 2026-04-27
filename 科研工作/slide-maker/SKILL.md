@@ -77,7 +77,8 @@ Load these only when relevant:
    - Select the route from the Image Route Policy.
    - Use the selected image route for PPT cover, section background, spot illustration, conceptual diagram, research poster, graphical abstract, or full-page image deck slides.
    - Copy final image assets into the deck workspace before insertion.
-   - For long decks, use `scripts/prepare_image2_deck.py` to create a resumable generation queue, record built-in membership `image_gen` outputs, or run Tokenlane/API mode with retries. Do not write one-off full-slide rendering scripts to bypass Image2.
+   - Before image generation, run `scripts/validate_authoring.py` so weak outlines, generic prompts, missing source maps, or missing style specs fail early.
+   - For long decks, use `scripts/prepare_image2_deck.py --route auto` to create a resumable generation queue, record built-in membership `image_gen` outputs, or run Tokenlane/API mode with retries. Do not write one-off full-slide rendering scripts to bypass Image2.
 8. Author the deck:
    - Default mode: one 16:9 Image2-designed image per slide, then use `scripts/build_image_deck.py` to place images full-bleed into a PPTX container.
    - Explicit editable mode: native editable PPTX shapes, text, charts, and images.
@@ -249,6 +250,7 @@ Image generation rules:
 - Use `--quality high` for cover and important visual pages when budget allows.
 - Use `--filename-prefix` with zero-padded slide numbers, for example `slide-01`, `slide-02`.
 - Save Image2 manifests next to the images; do not include API keys, Authorization headers, or raw `b64_json` in authoring files.
+- Use `scripts/detect_image_route.py` or `prepare_image2_deck.py --route auto` for route selection. ChatGPT/Codex membership resolves to `codex_builtin_imagegen` even if `auth.json` contains an `OPENAI_API_KEY` field; Tokenlane is for non-membership/API-login mode or explicit Tokenlane route only.
 - For built-in membership mode, do not assume the conversational `image_gen` tool returns a stable file path. Before calling `image_gen`, run `prepare_image2_deck.py --mode builtin-start` to snapshot `${CODEX_HOME:-~/.codex}/generated_images`; after generation, run `--mode builtin-capture` to find the new generated image, copy it into `images/slide-XX.png`, and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
 - Built-in membership `image_gen` is a conversational tool, so long decks must be generated in small resumable batches. Membership mode still uses member `image_gen`; do not switch membership mode to Tokenlane/API to improve stability.
 - For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
@@ -264,8 +266,18 @@ python3 /path/to/slide-maker/scripts/build_image_deck.py \
   --title "Deck title" \
   --notes-json "/absolute/path/to/workspace/authoring/page_prompts.json" \
   --image-manifest "/absolute/path/to/workspace/authoring/image_manifest.json" \
+  --expected-route auto \
+  --authoring-report "/absolute/path/to/workspace/authoring/authoring_qa.json" \
   --source-map "/absolute/path/to/workspace/authoring/source_map.json" \
   --montage "/absolute/path/to/workspace/rendered/montage.svg"
+```
+
+Authoring validation before image generation:
+
+```bash
+python3 /path/to/slide-maker/scripts/validate_authoring.py \
+  --workspace "/absolute/path/to/workspace" \
+  --report "/absolute/path/to/workspace/authoring/authoring_qa.json"
 ```
 
 Resumable Image2 preparation:
@@ -273,9 +285,18 @@ Resumable Image2 preparation:
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
-  --route codex_builtin_imagegen \
+  --route auto \
   --mode plan \
   --batch-size 3
+```
+
+Check current generation state at any time:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route auto \
+  --mode status
 ```
 
 For built-in membership mode, generate one slide at a time through the capture workflow. First snapshot the current built-in generated image folder:
@@ -283,7 +304,7 @@ For built-in membership mode, generate one slide at a time through the capture w
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
-  --route codex_builtin_imagegen \
+  --route auto \
   --mode builtin-start \
   --slide-number 1
 ```
@@ -293,19 +314,19 @@ Then call the conversational `image_gen` tool with the queued prompt for that sl
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
-  --route codex_builtin_imagegen \
+  --route auto \
   --mode builtin-capture \
   --slide-number 1
 ```
 
-If multiple new built-in images were created after the snapshot, `builtin-capture` writes the candidates into `authoring/builtin_imagegen_capture.json` and selects the newest candidate by default. Use `--candidate-index` or `--source-image` only when selecting a different candidate is necessary.
+If multiple new built-in images were created after the snapshot, `builtin-capture` writes the candidates into `authoring/builtin_imagegen_capture.json` and fails by default. Use `--candidate-index`, `--source-image`, or explicit `--auto-select-newest` only after checking the candidates.
 
 Manual record remains an escape hatch only when the generated image path is already known:
 
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
-  --route codex_builtin_imagegen \
+  --route auto \
   --mode record \
   --slide-number 1 \
   --source-image "/absolute/path/to/generated-image.png"
@@ -333,11 +354,11 @@ python3 /path/to/slide-maker/scripts/validate_image_deck.py \
   --page-prompts "/absolute/path/to/workspace/authoring/page_prompts.json" \
   --source-map "/absolute/path/to/workspace/authoring/source_map.json" \
   --image-manifest "/absolute/path/to/workspace/authoring/image_manifest.json" \
-  --expected-route codex_builtin_imagegen \
+  --expected-route auto \
   --qa-report "/absolute/path/to/workspace/qa-report.json"
 ```
 
-Use `--expected-route codex_builtin_imagegen` for membership mode and `--expected-route tokenlane_image2` for non-membership/API-login mode. Do not deliver a default image deck unless `validate_image_deck.py` exits successfully and the QA report has `valid: true` and `image_route_ok: true`.
+Use `--expected-route auto` unless the user explicitly selected a route for a test. Do not deliver a default image deck unless `validate_authoring.py`, `build_image_deck.py`, and `validate_image_deck.py` all exit successfully and the QA report has `valid: true` and `image_route_ok: true`.
 
 Revision rules:
 

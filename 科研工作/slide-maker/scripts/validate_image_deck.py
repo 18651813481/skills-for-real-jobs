@@ -11,9 +11,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from detect_image_route import detect_image_route
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
 ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
+ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
 GOOD_STATUSES = {"completed", "succeeded", "success", "ok"}
 SUSPICIOUS_SCRIPT_PATTERNS = [
     "from PIL import",
@@ -85,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-manifest", required=True, help="authoring/image_manifest.json path.")
     parser.add_argument(
         "--expected-route",
-        choices=sorted(ALLOWED_ROUTES),
+        choices=ROUTE_CHOICES,
         help="Optional expected route from login mode; fails if manifest route differs.",
     )
     parser.add_argument("--qa-report", help="Optional validation report JSON path.")
@@ -272,6 +274,12 @@ def validate_manifest(
 
     image_names = [image["name"] for image in images]
     slide_routes: list[str] = []
+    capture_quality = {
+        "codex_builtin_records": 0,
+        "auto_select_newest": 0,
+        "manual_source_image": 0,
+        "generated_images_delta": 0,
+    }
     for idx, record in enumerate(records):
         if not isinstance(record, dict):
             errors.append(f"manifest slide {idx + 1} is not an object")
@@ -299,11 +307,14 @@ def validate_manifest(
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             errors.append(f"slide {idx + 1} missing source_generated_path/generated_image_path/provider_output_id")
         if slide_route == "codex_builtin_imagegen":
+            capture_quality["codex_builtin_records"] += 1
             capture_method = str(record.get("capture_method") or "").strip()
             if capture_method not in {"generated_images_delta", "manual_source_image"}:
                 errors.append(
                     f"slide {idx + 1} codex_builtin_imagegen missing valid capture_method"
                 )
+            else:
+                capture_quality[capture_method] += 1
             if capture_method == "generated_images_delta" and not record.get("source_generated_path"):
                 errors.append(
                     f"slide {idx + 1} generated_images_delta capture missing source_generated_path"
@@ -314,6 +325,11 @@ def validate_manifest(
                 errors.append(f"slide {idx + 1} codex_builtin_imagegen missing source_sha256")
             if not record.get("captured_at"):
                 errors.append(f"slide {idx + 1} codex_builtin_imagegen missing captured_at")
+            if str(record.get("selection_reason") or "").strip() == "auto_select_newest":
+                capture_quality["auto_select_newest"] += 1
+                warnings.append(f"slide {idx + 1} used auto_select_newest capture selection")
+            if record.get("capture_candidate_count") is None:
+                warnings.append(f"slide {idx + 1} codex_builtin_imagegen missing capture_candidate_count")
         status = str(record.get("generation_status") or "").strip().lower()
         if status not in GOOD_STATUSES:
             errors.append(f"slide {idx + 1} invalid generation_status: {status or '<empty>'}")
@@ -323,6 +339,7 @@ def validate_manifest(
         "image_route_ok": route_ok,
         "manifest_slide_count": len(records),
         "slide_routes": slide_routes,
+        "capture_quality": capture_quality,
     }
     return summary, errors, warnings
 
@@ -467,6 +484,8 @@ def main() -> int:
     manifest_path = Path(args.image_manifest).expanduser().resolve()
     deck_root = Path(args.deck_root).expanduser().resolve() if args.deck_root else pptx.parent
     approval_path = require_non_image2_approval(args.non_image2_approval) if args.allow_non_image2 else None
+    route_detection = detect_image_route(args.expected_route or "auto") if args.expected_route else None
+    expected_route = route_detection["image_route"] if route_detection else ""
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -483,20 +502,20 @@ def main() -> int:
     )
     errors.extend(manifest_errors)
     warnings.extend(manifest_warnings)
-    if args.expected_route and manifest_summary["image_route"] != args.expected_route:
+    if expected_route and manifest_summary["image_route"] != expected_route:
         errors.append(
-            f"image_route {manifest_summary['image_route']} does not match expected route {args.expected_route}"
+            f"image_route {manifest_summary['image_route']} does not match expected route {expected_route}"
         )
-    if args.expected_route:
+    if expected_route:
         bad_slide_routes = [
             f"{idx + 1}:{route}"
             for idx, route in enumerate(manifest_summary.get("slide_routes", []))
-            if route != args.expected_route
+            if route != expected_route
         ]
         if bad_slide_routes:
             errors.append(
                 "manifest slide routes do not match expected route "
-                f"{args.expected_route}: " + ", ".join(bad_slide_routes[:12])
+                f"{expected_route}: " + ", ".join(bad_slide_routes[:12])
             )
 
     image_count = len(images)
@@ -539,7 +558,12 @@ def main() -> int:
         "image_manifest_path": str(manifest_path),
         "image_route": manifest_summary["image_route"],
         "image_route_ok": manifest_summary["image_route_ok"],
+        "expected_route": expected_route or None,
+        "route_detection": route_detection,
         "slide_routes": manifest_summary["slide_routes"],
+        "capture_quality": manifest_summary["capture_quality"],
+        "authoring_valid": None,
+        "prompt_quality_warnings": prompt_warnings,
         "image_manifest_slide_count": manifest_summary["manifest_slide_count"],
     }
     if args.qa_report:

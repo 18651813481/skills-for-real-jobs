@@ -24,8 +24,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from detect_image_route import detect_image_route
 
 ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
+ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
 DEFAULT_IMAGE2_SCRIPT = "/Users/fly/.codex/skills/Image2/scripts/generate_image.py"
 
@@ -33,11 +35,11 @@ DEFAULT_IMAGE2_SCRIPT = "/Users/fly/.codex/skills/Image2/scripts/generate_image.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare or run Image2 generation for an image deck.")
     parser.add_argument("--workspace", required=True, help="Deck workspace root.")
-    parser.add_argument("--route", required=True, choices=sorted(ALLOWED_ROUTES), help="Image2 route to use.")
+    parser.add_argument("--route", required=True, choices=ROUTE_CHOICES, help="Image2 route to use.")
     parser.add_argument(
         "--mode",
         default="plan",
-        choices=["plan", "builtin-start", "builtin-capture", "generate-tokenlane", "record"],
+        choices=["plan", "status", "builtin-start", "builtin-capture", "generate-tokenlane", "record"],
         help=(
             "plan writes a resumable queue; builtin-start snapshots generated_images before membership "
             "image_gen; builtin-capture copies the new built-in image_gen output; generate-tokenlane "
@@ -66,8 +68,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--candidate-index",
         type=int,
-        default=1,
         help="1-based candidate index for --mode builtin-capture when multiple new generated images exist.",
+    )
+    parser.add_argument(
+        "--auto-select-newest",
+        action="store_true",
+        help="Allow builtin-capture to select newest image when multiple candidates exist.",
     )
     parser.add_argument("--provider-output-id", default="", help="Optional provider output id for --mode record.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without generating or copying.")
@@ -102,7 +108,7 @@ def default_generated_root() -> Path:
     return base / "generated_images"
 
 
-def generated_file_records(root: Path) -> list[dict[str, Any]]:
+def generated_file_records(root: Path, *, include_sha256: bool = False) -> list[dict[str, Any]]:
     if not root.exists():
         return []
     records: list[dict[str, Any]] = []
@@ -111,18 +117,20 @@ def generated_file_records(root: Path) -> list[dict[str, Any]]:
             continue
         try:
             stat = path.stat()
-            digest = sha256_file(path)
         except OSError:
             continue
-        records.append(
-            {
-                "path": str(path.resolve()),
-                "name": path.name,
-                "mtime_ns": stat.st_mtime_ns,
-                "size": stat.st_size,
-                "sha256": digest,
-            }
-        )
+        record = {
+            "path": str(path.resolve()),
+            "name": path.name,
+            "mtime_ns": stat.st_mtime_ns,
+            "size": stat.st_size,
+        }
+        if include_sha256:
+            try:
+                record["sha256"] = sha256_file(path)
+            except OSError:
+                continue
+        records.append(record)
     records.sort(key=lambda item: (int(item["mtime_ns"]), str(item["path"])), reverse=True)
     return records
 
@@ -224,6 +232,18 @@ def completed_slide_numbers(manifest: dict[str, Any], images_dir: Path) -> set[i
     return done
 
 
+def manifest_slide_numbers(manifest: dict[str, Any]) -> set[int]:
+    numbers: set[int] = set()
+    for record in manifest.get("slides", []):
+        if not isinstance(record, dict):
+            continue
+        try:
+            numbers.add(int(record.get("slide_number")))
+        except (TypeError, ValueError):
+            continue
+    return numbers
+
+
 def queue_records(page_records: list[dict[str, Any]], manifest: dict[str, Any], images_dir: Path) -> list[dict[str, Any]]:
     done = completed_slide_numbers(manifest, images_dir)
     queued: list[dict[str, Any]] = []
@@ -275,6 +295,55 @@ def write_queue(path: Path, route: str, queued: list[dict[str, Any]], batch_size
     }
     write_json(path, payload)
     return payload
+
+
+def build_status(
+    *,
+    route: str,
+    route_detection: dict[str, Any],
+    workspace: Path,
+    page_prompts: Path,
+    images_dir: Path,
+    manifest_path: Path,
+    queue_path: Path,
+    capture_path: Path,
+    generated_root: Path,
+    queued: list[dict[str, Any]],
+    queue_payload: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    next_slide = queued[0] if queued else None
+    manifest_done = manifest_slide_numbers(manifest)
+    missing_manifest_records = [
+        int(item["slide_number"])
+        for item in queued
+        if int(item["slide_number"]) not in manifest_done
+    ]
+    if not queued:
+        next_action = "all_slide_images_recorded"
+    elif route == "codex_builtin_imagegen":
+        next_action = "run builtin-start, call image_gen with next_prompt, then run builtin-capture"
+    elif route == "tokenlane_image2":
+        next_action = "run generate-tokenlane"
+    else:
+        next_action = "resolve route"
+    return {
+        "workspace": str(workspace),
+        "route": route,
+        "route_detection": route_detection,
+        "page_prompts": str(page_prompts),
+        "images_dir": str(images_dir),
+        "manifest": str(manifest_path),
+        "queue": str(queue_path),
+        "capture": str(capture_path),
+        "generated_root": str(generated_root),
+        "pending_count": len(queued),
+        "next_action": next_action,
+        "next_slide_number": next_slide.get("slide_number") if next_slide else None,
+        "next_prompt": next_slide.get("prompt") if next_slide else "",
+        "missing_manifest_records": missing_manifest_records,
+        "next_batch": queue_payload.get("next_batch", []),
+    }
 
 
 def record_image(
@@ -350,7 +419,7 @@ def builtin_start(
 
 
 def candidate_delta(capture: dict[str, Any], generated_root: Path) -> list[dict[str, Any]]:
-    current = generated_file_records(generated_root)
+    current = generated_file_records(generated_root, include_sha256=True)
     baseline = capture.get("baseline")
     if not isinstance(baseline, list):
         raise SystemExit("capture file missing baseline[]; run builtin-start first")
@@ -367,7 +436,7 @@ def candidate_delta(capture: dict[str, Any], generated_root: Path) -> list[dict[
             candidate["delta_reason"] = "new_path"
             candidates.append(candidate)
             continue
-        if old.get("size") != item.get("size") or old.get("sha256") != item.get("sha256"):
+        if old.get("size") != item.get("size") or old.get("mtime_ns") != item.get("mtime_ns"):
             candidate = dict(item)
             candidate["delta_reason"] = "changed_file"
             candidates.append(candidate)
@@ -398,6 +467,7 @@ def builtin_capture(
     source_image: Path
     candidates: list[dict[str, Any]]
     selected_index = 1
+    selection_reason = "single_candidate"
     if args.source_image:
         source_image = Path(args.source_image).expanduser().resolve()
         if not source_image.exists():
@@ -413,6 +483,7 @@ def builtin_capture(
                 "delta_reason": "manual_source_image",
             }
         ]
+        selection_reason = "manual_source_image"
     else:
         candidates = candidate_delta(capture, generated_root)
         capture["captured_candidates"] = candidates
@@ -424,15 +495,24 @@ def builtin_capture(
                 "no new built-in image_gen output found under generated_images; "
                 "rerun image_gen after builtin-start or pass --source-image"
             )
-        if args.candidate_index < 1 or args.candidate_index > len(candidates):
+        if len(candidates) > 1 and not args.candidate_index and not args.auto_select_newest:
+            raise SystemExit(
+                "multiple new built-in image_gen outputs found; rerun with --candidate-index, "
+                f"--source-image, or --auto-select-newest. Candidates were written to {capture_path}"
+            )
+        if args.candidate_index and (args.candidate_index < 1 or args.candidate_index > len(candidates)):
             raise SystemExit(
                 f"--candidate-index must be between 1 and {len(candidates)}; "
                 f"candidates were written to {capture_path}"
             )
-        selected_index = args.candidate_index
+        selected_index = args.candidate_index or 1
+        selection_reason = "candidate_index" if args.candidate_index else (
+            "auto_select_newest" if len(candidates) > 1 else "single_candidate"
+        )
         source_image = Path(str(candidates[selected_index - 1]["path"])).expanduser().resolve()
 
     source_sha256 = sha256_file(source_image)
+    capture_method = "manual_source_image" if args.source_image else "generated_images_delta"
     target = record_image(
         manifest_path=manifest_path,
         manifest=manifest,
@@ -443,10 +523,12 @@ def builtin_capture(
         prompt_ref=prompt_ref,
         provider_output_id=args.provider_output_id,
         extra_fields={
-            "capture_method": "generated_images_delta",
+            "capture_method": capture_method,
             "capture_root": str(generated_root),
             "source_sha256": source_sha256,
             "captured_at": datetime.now(timezone.utc).isoformat(),
+            "selection_reason": selection_reason,
+            "capture_candidate_count": len(candidates),
         },
     )
     result = {
@@ -456,12 +538,12 @@ def builtin_capture(
         "source_sha256": source_sha256,
         "candidate_count": len(candidates),
         "candidate_index": selected_index,
+        "selection_reason": selection_reason,
         "capture": str(capture_path),
     }
     if len(candidates) > 1:
         result["warning"] = (
-            "multiple new generated images found; selected newest candidate by default "
-            "unless --candidate-index was provided"
+            "multiple new generated images found; selected candidate by explicit index or --auto-select-newest"
         )
     return result
 
@@ -562,6 +644,9 @@ def generate_tokenlane(args: argparse.Namespace, queued: list[dict[str, Any]], m
 
 def main() -> int:
     args = parse_args()
+    route_detection = detect_image_route(args.route)
+    resolved_route = str(route_detection["image_route"])
+    args.route = resolved_route
     workspace = Path(args.workspace).expanduser().resolve()
     authoring = workspace / "authoring"
     page_prompts = Path(args.page_prompts).expanduser().resolve() if args.page_prompts else authoring / "page_prompts.json"
@@ -572,13 +657,14 @@ def main() -> int:
     generated_root = Path(args.generated_root).expanduser().resolve() if args.generated_root else default_generated_root()
 
     records = records_from_json(page_prompts)
-    manifest = load_manifest(manifest_path, args.route)
+    manifest = load_manifest(manifest_path, resolved_route)
     queued = queue_records(records, manifest, images_dir)
-    queue_payload = write_queue(queue_path, args.route, queued, args.batch_size)
+    queue_payload = write_queue(queue_path, resolved_route, queued, args.batch_size)
 
     result: dict[str, Any] = {
         "workspace": str(workspace),
-        "route": args.route,
+        "route": resolved_route,
+        "route_detection": route_detection,
         "mode": args.mode,
         "page_prompts": str(page_prompts),
         "images_dir": str(images_dir),
@@ -590,10 +676,25 @@ def main() -> int:
         "next_batch_count": len(queue_payload["next_batch"]),
     }
 
-    if args.mode == "builtin-start":
+    if args.mode == "status":
+        result["status"] = build_status(
+            route=resolved_route,
+            route_detection=route_detection,
+            workspace=workspace,
+            page_prompts=page_prompts,
+            images_dir=images_dir,
+            manifest_path=manifest_path,
+            queue_path=queue_path,
+            capture_path=capture_path,
+            generated_root=generated_root,
+            queued=queued,
+            queue_payload=queue_payload,
+            manifest=manifest,
+        )
+    elif args.mode == "builtin-start":
         result["builtin_start"] = builtin_start(
             args=args,
-            route=args.route,
+            route=resolved_route,
             workspace=workspace,
             capture_path=capture_path,
             generated_root=generated_root,
@@ -610,14 +711,14 @@ def main() -> int:
             generated_root=generated_root,
         )
     elif args.mode == "record":
-        if args.route != "codex_builtin_imagegen":
+        if resolved_route != "codex_builtin_imagegen":
             raise SystemExit("--mode record is for built-in membership image_gen outputs")
         if not args.slide_number or not args.source_image:
             raise SystemExit("--mode record requires --slide-number and --source-image")
         target = record_image(
             manifest_path=manifest_path,
             manifest=manifest,
-            route=args.route,
+            route=resolved_route,
             images_dir=images_dir,
             slide_no=args.slide_number,
             source_image=Path(args.source_image).expanduser().resolve(),
@@ -632,7 +733,7 @@ def main() -> int:
         )
         result["recorded_image"] = str(target)
     elif args.mode == "generate-tokenlane":
-        if args.route != "tokenlane_image2":
+        if resolved_route != "tokenlane_image2":
             raise SystemExit("--mode generate-tokenlane requires --route tokenlane_image2")
         result["generated"] = generate_tokenlane(args, queued, manifest, manifest_path, images_dir)
     elif args.mode == "plan":

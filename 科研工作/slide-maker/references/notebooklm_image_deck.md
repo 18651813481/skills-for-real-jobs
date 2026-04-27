@@ -34,11 +34,15 @@ For each `page_prompts.json` record:
   "slide_number": 1,
   "slide_job": "explain",
   "page_type": "concept_map",
+  "content_density": "sparse|normal|dense|table_heavy|high_infographic",
   "page_text": "short visible text only",
+  "visible_items": ["exact visible Chinese label"],
   "visual_format": "concept map with three labeled nodes",
   "visual_metaphor": "network opening from a teacher training hub to schools",
   "visual_brief": "human-readable design brief",
   "image_prompt": "final Image2 prompt assembled from style_spec + page content",
+  "text_risk_level": "low|medium|high",
+  "fallback_strategy": "reduce labels and regenerate with the same route",
   "speaker_notes": "source details, caveats, long explanation"
 }
 ```
@@ -104,3 +108,5 @@ If generated Chinese text is garbled or too small:
 5. if exact text is mission-critical, ask the user before switching to editable PPTX text or deterministic local rendering.
 
 For default slide-maker decks, `image_route: none` means the image-deck requirement was not met unless the user explicitly approved that fallback before generation.
+
+Run `scripts/validate_authoring.py` before generating images. The authoring artifacts must pass before using Image2; otherwise weak prompts, generic backgrounds, missing source maps, or unstructured dense pages will fail too late.

@@ -22,10 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from detect_image_route import detect_image_route
 
 SLIDE_W = 13.333333
 SLIDE_H = 7.5
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
+ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
+ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
 
 
 @dataclass
@@ -44,6 +47,8 @@ class ImageManifest:
     route_ok: bool
     slide_count: int
     warnings: list[str]
+    route_detection: dict[str, Any] | None
+    capture_quality: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--expected-route",
+        choices=ROUTE_CHOICES,
+        help="Optional expected route from login mode; use auto to detect from Codex auth.",
+    )
+    parser.add_argument(
         "--allow-non-image2",
         action="store_true",
         help=(
@@ -87,6 +97,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--qa-report",
         help="Optional QA report path. Defaults to <output-dir>/qa-report.json.",
+    )
+    parser.add_argument(
+        "--authoring-report",
+        help="Optional authoring QA report. Defaults to <output-dir>/authoring/authoring_qa.json when present.",
     )
     parser.add_argument(
         "--montage",
@@ -239,8 +253,9 @@ def load_image_manifest(
     images: list[ImageInfo],
     allow_non_image2: bool,
     non_image2_approval: str | None,
+    expected_route: str | None,
+    route_detection: dict[str, Any] | None,
 ) -> ImageManifest:
-    allowed_routes = {"codex_builtin_imagegen", "tokenlane_image2"}
     approval_path = require_non_image2_approval(non_image2_approval) if allow_non_image2 else None
     if not path:
         if allow_non_image2:
@@ -253,6 +268,8 @@ def load_image_manifest(
                     "missing image_manifest.json; non-Image2 fallback was explicitly approved",
                     f"approval_file={approval_path}",
                 ],
+                route_detection=route_detection,
+                capture_quality={"codex_builtin_records": 0, "auto_select_newest": 0},
             )
         raise SystemExit(
             "image manifest is required for slide-maker image decks. "
@@ -274,7 +291,7 @@ def load_image_manifest(
         raise SystemExit("image manifest must contain a slides list")
 
     warnings: list[str] = []
-    route_ok = route in allowed_routes
+    route_ok = route in ALLOWED_ROUTES
     if not route_ok and not allow_non_image2:
         raise SystemExit(
             f"invalid image_route in manifest: {route or '<empty>'}. "
@@ -282,6 +299,8 @@ def load_image_manifest(
         )
     if not route_ok and allow_non_image2:
         warnings.append(f"non-Image2 route explicitly approved: {route or '<empty>'}")
+    if expected_route and route != expected_route:
+        raise SystemExit(f"image_route {route or '<empty>'} does not match expected route {expected_route}")
 
     if len(records) != len(images):
         raise SystemExit(
@@ -289,16 +308,24 @@ def load_image_manifest(
         )
 
     image_names = [info.path.name for info in images]
+    capture_quality = {
+        "codex_builtin_records": 0,
+        "auto_select_newest": 0,
+        "manual_source_image": 0,
+        "generated_images_delta": 0,
+    }
     for idx, record in enumerate(records):
         if not isinstance(record, dict):
             raise SystemExit(f"image manifest slide record {idx + 1} must be an object")
         slide_route = str(record.get("image_route") or record.get("route") or route).strip()
-        if slide_route not in allowed_routes:
+        if slide_route not in ALLOWED_ROUTES:
             message = f"slide {idx + 1} has invalid image_route: {slide_route or '<empty>'}"
             if allow_non_image2:
                 warnings.append(message)
             else:
                 raise SystemExit(message)
+        if expected_route and slide_route != expected_route:
+            raise SystemExit(f"slide {idx + 1} route {slide_route or '<empty>'} does not match expected route {expected_route}")
         image_value = (
             record.get("image")
             or record.get("image_path")
@@ -313,6 +340,24 @@ def load_image_manifest(
                 f"image manifest slide {idx + 1} points to {manifest_name}, "
                 f"but images directory has {image_names[idx]}"
             )
+        if not record.get("prompt_ref"):
+            raise SystemExit(f"image manifest slide {idx + 1} missing prompt_ref")
+        if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
+            raise SystemExit(f"image manifest slide {idx + 1} missing source/generated/provider id")
+        if slide_route == "codex_builtin_imagegen":
+            capture_quality["codex_builtin_records"] += 1
+            capture_method = str(record.get("capture_method") or "").strip()
+            if capture_method not in {"generated_images_delta", "manual_source_image"}:
+                raise SystemExit(f"image manifest slide {idx + 1} missing valid capture_method")
+            capture_quality[capture_method] += 1
+            for key in ("capture_root", "source_sha256", "captured_at"):
+                if not record.get(key):
+                    raise SystemExit(f"image manifest slide {idx + 1} missing {key}")
+            if str(record.get("selection_reason") or "").strip() == "auto_select_newest":
+                capture_quality["auto_select_newest"] += 1
+                warnings.append(f"slide {idx + 1} used auto_select_newest capture selection")
+            if record.get("capture_candidate_count") is None:
+                warnings.append(f"slide {idx + 1} missing capture_candidate_count")
 
     return ImageManifest(
         path=manifest_path,
@@ -320,6 +365,8 @@ def load_image_manifest(
         route_ok=route_ok,
         slide_count=len(records),
         warnings=warnings,
+        route_detection=route_detection,
+        capture_quality=capture_quality,
     )
 
 
@@ -449,7 +496,13 @@ def write_qa_report(
     source_map: str | None,
     non_16x9: list[ImageInfo],
     manifest: ImageManifest,
+    authoring_report: dict[str, Any] | None,
 ) -> None:
+    authoring_warnings: list[Any] = []
+    if authoring_report:
+        warnings = authoring_report.get("warnings")
+        if isinstance(warnings, list):
+            authoring_warnings = warnings
     report = {
         "pptx": str(output),
         "exists": output.exists(),
@@ -461,6 +514,11 @@ def write_qa_report(
         "image_manifest_path": str(manifest.path) if manifest.path else None,
         "image_manifest_slide_count": manifest.slide_count,
         "image_manifest_warnings": manifest.warnings,
+        "route_detection": manifest.route_detection,
+        "capture_quality": manifest.capture_quality,
+        "authoring_valid": authoring_report.get("valid") if authoring_report else None,
+        "authoring_report_path": authoring_report.get("path") if authoring_report else None,
+        "prompt_quality_warnings": authoring_warnings,
         "all_images_16x9": not non_16x9,
         "non_16x9_images": [
             {
@@ -492,11 +550,15 @@ def main() -> int:
         )
         raise SystemExit(f"non-16:9 slide images found; pass --allow-non-16x9 to continue:\n{bad}")
 
+    route_detection = detect_image_route(args.expected_route or "auto") if args.expected_route else None
+    expected_route = str(route_detection["image_route"]) if route_detection else None
     manifest = load_image_manifest(
         args.image_manifest,
         images,
         args.allow_non_image2,
         args.non_image2_approval,
+        expected_route,
+        route_detection,
     )
     notes = load_notes(args.notes_json, len(images))
     node = find_node(args.node)
@@ -519,6 +581,21 @@ def main() -> int:
         if args.qa_report
         else output.parent / "qa-report.json"
     )
+    authoring_report_path = (
+        Path(args.authoring_report).expanduser().resolve()
+        if args.authoring_report
+        else output.parent / "authoring" / "authoring_qa.json"
+    )
+    authoring_report: dict[str, Any] | None = None
+    if authoring_report_path.exists():
+        try:
+            authoring_report = json.loads(authoring_report_path.read_text(encoding="utf-8"))
+            if isinstance(authoring_report, dict):
+                authoring_report["path"] = str(authoring_report_path)
+            else:
+                authoring_report = {"valid": False, "path": str(authoring_report_path)}
+        except json.JSONDecodeError:
+            authoring_report = {"valid": False, "path": str(authoring_report_path)}
     write_qa_report(
         qa_path,
         output=output,
@@ -527,6 +604,7 @@ def main() -> int:
         source_map=args.source_map,
         non_16x9=non_16x9,
         manifest=manifest,
+        authoring_report=authoring_report,
     )
 
     print(
