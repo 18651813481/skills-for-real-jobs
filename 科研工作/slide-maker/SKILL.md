@@ -15,6 +15,7 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 - In the default image deck mode, clearly report that visual quality is prioritized and slide text is not natively editable. If the user explicitly asks for NotebookLM-style, full-image, image deck, visual-first, or "全图像化" output, treat it as confirmation of the default Image2 route and be more aggressive with visual composition.
 - A locally rendered full-slide PNG/JPG is not a substitute for Image2. Do not satisfy the default image-deck requirement by rendering HTML, SVG, canvas, matplotlib, PIL, PPT screenshots, or deterministic local layouts into images unless the user explicitly asks for deterministic rendering or editable/typographic precision over Image2 design.
 - For default deck generation, `image_route: none` is a QA failure. Use `codex_builtin_imagegen` or `tokenlane_image2`, or stop and ask before producing a non-Image2 deck.
+- In API/non-membership mode, `tokenlane_image2` is locked to `gpt-image-2`. Do not use another image model, another API image route, local rendering, screenshots, or deterministic full-slide graphics as a replacement. If `gpt-image-2` is unavailable, stop and report the Image2 route failure.
 - Do not make any single visual style the global default. Follow the user's style prompt for the current deck; if no style is specified, infer the most suitable style from the source material, audience, purpose, and viewing context.
 - If the current prompt explicitly asks for "Apple 发布会风格", "Apple keynote style", "发布会风格", "keynote", "premium launch", "视觉精致", or otherwise prioritizes cinematic/polished full-page visuals, treat that current deck as visual-first and use the NotebookLM-style image deck workflow with Image2/gpt-image-2 by default, unless the user explicitly says the slide text must remain natively editable. This is prompt-scoped and must not carry over to unrelated documents.
 - Do not use screenshots, HTML, PDF, or a webpage as the main deliverable. The default deliverable is a `.pptx` image deck; use native editable `.pptx` only when the user explicitly asks for editable text/shapes/charts.
@@ -255,6 +256,7 @@ Image generation rules:
 - Built-in membership `image_gen` is a conversational tool, so long decks must be generated in small resumable batches. Membership mode still uses member `image_gen`; do not switch membership mode to Tokenlane/API to improve stability.
 - For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
 - Tokenlane/API generation is used only in non-membership/API-login contexts. Do not call Tokenlane merely because a member-login `image_gen` run is slow or times out.
+- Tokenlane/API mode must pass `--model gpt-image-2` and manifest records must include `image_model: "gpt-image-2"` and `model_lock: "gpt-image-2"`. Any other model is a failed slide-maker run.
 - Never create or run a local full-slide rendering script as a substitute for Image2. A Python/PIL, SVG, HTML/canvas, matplotlib, or PPT screenshot generator may only be used for deterministic source charts or explicit user-approved fallback, not for the default slide page images.
 
 Assembly command:
@@ -339,6 +341,7 @@ python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
   --route tokenlane_image2 \
   --mode generate-tokenlane \
+  --model gpt-image-2 \
   --timeout 300 \
   --retries 3
 ```
@@ -445,7 +448,7 @@ Final response should include:
 ## Failure Handling
 
 - If official `slides` skill is unavailable, use `Presentations` and report that OpenAI curated slides was not available locally.
-- If the required Image2 route for the current login mode fails, retry or resume with the same route. Do not switch from membership `image_gen` to Tokenlane, or from API/Tokenlane to membership `image_gen`, just to avoid timeout or quota problems.
+- If the required Image2 route for the current login mode fails, retry or resume with the same route. Do not switch from membership `image_gen` to Tokenlane, from API/Tokenlane to membership `image_gen`, from `gpt-image-2` to another image model, or to local rendering just to avoid timeout or quota problems.
 - If the required Image2 route remains unavailable, stop and report the route problem. Ask before producing the deck without AI images. Do not silently switch to deterministic local rendering for the main deck.
 - If source material is insufficient for factual claims, ask for the source or mark the deck as a concept draft.
 - If the user requests NotebookLM specifically, explain that this workflow avoids NotebookLM and stays in Codex.

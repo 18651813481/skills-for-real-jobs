@@ -29,6 +29,7 @@ SLIDE_H = 7.5
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
 ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
 ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
+REQUIRED_IMAGE2_MODEL = "gpt-image-2"
 
 
 @dataclass
@@ -344,6 +345,17 @@ def load_image_manifest(
             raise SystemExit(f"image manifest slide {idx + 1} missing prompt_ref")
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             raise SystemExit(f"image manifest slide {idx + 1} missing source/generated/provider id")
+        image_model = str(record.get("image_model") or record.get("model") or "").strip()
+        if image_model != REQUIRED_IMAGE2_MODEL:
+            raise SystemExit(
+                f"image manifest slide {idx + 1} image_model must be {REQUIRED_IMAGE2_MODEL}; got {image_model or '<empty>'}"
+            )
+        if slide_route == "tokenlane_image2":
+            model_lock = str(record.get("model_lock") or image_model).strip()
+            if model_lock != REQUIRED_IMAGE2_MODEL:
+                raise SystemExit(
+                    f"image manifest slide {idx + 1} tokenlane_image2 model_lock must be {REQUIRED_IMAGE2_MODEL}; got {model_lock or '<empty>'}"
+                )
         if slide_route == "codex_builtin_imagegen":
             capture_quality["codex_builtin_records"] += 1
             capture_method = str(record.get("capture_method") or "").strip()

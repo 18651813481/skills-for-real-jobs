@@ -16,6 +16,7 @@ from detect_image_route import detect_image_route
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
 ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
 ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
+REQUIRED_IMAGE2_MODEL = "gpt-image-2"
 GOOD_STATUSES = {"completed", "succeeded", "success", "ok"}
 SUSPICIOUS_SCRIPT_PATTERNS = [
     "from PIL import",
@@ -306,6 +307,17 @@ def validate_manifest(
             errors.append(f"slide {idx + 1} missing prompt_ref")
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             errors.append(f"slide {idx + 1} missing source_generated_path/generated_image_path/provider_output_id")
+        image_model = str(record.get("image_model") or record.get("model") or "").strip()
+        if image_model != REQUIRED_IMAGE2_MODEL:
+            errors.append(
+                f"slide {idx + 1} image_model must be {REQUIRED_IMAGE2_MODEL}; got {image_model or '<empty>'}"
+            )
+        if slide_route == "tokenlane_image2":
+            model_lock = str(record.get("model_lock") or image_model).strip()
+            if model_lock != REQUIRED_IMAGE2_MODEL:
+                errors.append(
+                    f"slide {idx + 1} tokenlane_image2 model_lock must be {REQUIRED_IMAGE2_MODEL}; got {model_lock or '<empty>'}"
+                )
         if slide_route == "codex_builtin_imagegen":
             capture_quality["codex_builtin_records"] += 1
             capture_method = str(record.get("capture_method") or "").strip()

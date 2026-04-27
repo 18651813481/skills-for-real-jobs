@@ -28,6 +28,7 @@ from detect_image_route import detect_image_route
 
 ALLOWED_ROUTES = {"codex_builtin_imagegen", "tokenlane_image2"}
 ROUTE_CHOICES = sorted(ALLOWED_ROUTES | {"auto"})
+REQUIRED_IMAGE2_MODEL = "gpt-image-2"
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg"}
 DEFAULT_IMAGE2_SCRIPT = "/Users/fly/.codex/skills/Image2/scripts/generate_image.py"
 
@@ -59,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size", default="1536x864", help="Image2 size for Tokenlane generation.")
     parser.add_argument("--quality", default="high", help="Image2 quality for Tokenlane generation.")
     parser.add_argument("--preset", default="ppt-diagram", help="Image2 preset for Tokenlane generation.")
+    parser.add_argument(
+        "--model",
+        default=REQUIRED_IMAGE2_MODEL,
+        help="Locked Image2 model for Tokenlane/API mode. Must be gpt-image-2.",
+    )
     parser.add_argument("--timeout", type=int, default=300, help="Tokenlane request timeout in seconds.")
     parser.add_argument("--retries", type=int, default=3, help="Tokenlane retries per slide.")
     parser.add_argument("--image2-script", default=DEFAULT_IMAGE2_SCRIPT, help="Tokenlane Image2 script path.")
@@ -356,6 +362,7 @@ def record_image(
     source_image: Path,
     prompt_ref: str,
     provider_output_id: str = "",
+    image_model: str = REQUIRED_IMAGE2_MODEL,
     extra_fields: dict[str, Any] | None = None,
 ) -> Path:
     if not source_image.exists():
@@ -373,6 +380,8 @@ def record_image(
         "prompt_ref": prompt_ref,
         "source_generated_path": str(source_image),
         "provider_output_id": provider_output_id,
+        "image_model": image_model,
+        "model": image_model,
         "generation_status": "completed",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -558,13 +567,18 @@ def run_tokenlane(
     size: str,
     quality: str,
     preset: str,
+    model: str,
     timeout: int,
 ) -> dict[str, Any]:
+    if model != REQUIRED_IMAGE2_MODEL:
+        raise RuntimeError(f"slide-maker API route is locked to {REQUIRED_IMAGE2_MODEL}; got {model}")
     cmd = [
         python,
         str(image2_script),
         "--prompt",
         prompt,
+        "--model",
+        REQUIRED_IMAGE2_MODEL,
         "--size",
         size,
         "--quality",
@@ -590,6 +604,8 @@ def run_tokenlane(
 
 
 def generate_tokenlane(args: argparse.Namespace, queued: list[dict[str, Any]], manifest: dict[str, Any], manifest_path: Path, images_dir: Path) -> list[dict[str, Any]]:
+    if args.model != REQUIRED_IMAGE2_MODEL:
+        raise SystemExit(f"slide-maker API route is locked to {REQUIRED_IMAGE2_MODEL}; got {args.model}")
     image2_script = Path(args.image2_script).expanduser().resolve()
     if not image2_script.exists():
         raise SystemExit(f"Image2 script not found: {image2_script}")
@@ -616,8 +632,15 @@ def generate_tokenlane(args: argparse.Namespace, queued: list[dict[str, Any]], m
                     size=args.size,
                     quality=args.quality,
                     preset=args.preset,
+                    model=args.model,
                     timeout=args.timeout,
                 )
+                result_model = str(result.get("model") or "").strip()
+                if result_model != REQUIRED_IMAGE2_MODEL:
+                    raise RuntimeError(
+                        f"Tokenlane Image2 returned model {result_model or '<empty>'}; "
+                        f"expected {REQUIRED_IMAGE2_MODEL}"
+                    )
                 output_path = Path(result.get("output_path") or (result.get("output_paths") or [""])[0])
                 if not output_path.exists():
                     raise RuntimeError(f"Tokenlane output image not found: {output_path}")
@@ -630,6 +653,12 @@ def generate_tokenlane(args: argparse.Namespace, queued: list[dict[str, Any]], m
                     source_image=output_path,
                     prompt_ref=item["prompt_ref"],
                     provider_output_id=str(result.get("response_id") or ""),
+                    image_model=REQUIRED_IMAGE2_MODEL,
+                    extra_fields={
+                        "api": str(result.get("api") or "images"),
+                        "request_kind": "tokenlane_image2_generation",
+                        "model_lock": REQUIRED_IMAGE2_MODEL,
+                    },
                 )
                 generated.append({"slide_number": slide_no, "image": str(copied), "attempt": attempt})
                 break
