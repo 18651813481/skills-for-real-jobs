@@ -36,6 +36,40 @@ GENERIC_VISUAL_PHRASES = [
     "简单背景",
     "纯背景",
 ]
+DENSE_DENSITY_VALUES = {"dense", "table_heavy"}
+ALLOWED_VISUALIZATION_TYPES = {
+    "infographic",
+    "concept_map",
+    "workflow",
+    "comparison",
+    "comparison_matrix",
+    "timeline",
+    "roadmap",
+    "metrics",
+    "metrics_card",
+    "table_visualization",
+    "scorecard",
+    "risk_map",
+    "decision_tree",
+    "source_quote",
+    "closing",
+    "scene_explainer",
+}
+DENSE_VISUALIZATION_TYPES = {
+    "infographic",
+    "concept_map",
+    "workflow",
+    "comparison",
+    "comparison_matrix",
+    "timeline",
+    "roadmap",
+    "metrics",
+    "metrics_card",
+    "table_visualization",
+    "scorecard",
+    "risk_map",
+    "decision_tree",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -278,11 +312,24 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
             errors.append(f"page_prompts slide {idx + 1} is not an object")
             continue
         page_text = str(record.get("page_text") or record.get("visible_text") or "").strip()
+        content_density = str(record.get("content_density") or "").strip().lower()
+        visualization_type = str(record.get("visualization_type") or "").strip().lower()
         visual_brief = str(record.get("visual_brief") or "").strip()
         visual_format = str(record.get("visual_format") or "").strip()
         visual_metaphor = str(record.get("visual_metaphor") or "").strip()
         image_prompt = str(record.get("image_prompt") or "").strip()
         speaker_notes = str(record.get("speaker_notes") or record.get("notes") or "").strip()
+        if not content_density:
+            errors.append(f"page_prompts slide {idx + 1} missing content_density")
+        if not visualization_type:
+            errors.append(f"page_prompts slide {idx + 1} missing visualization_type")
+        elif visualization_type not in ALLOWED_VISUALIZATION_TYPES:
+            warnings.append(f"page_prompts slide {idx + 1} uses unrecognized visualization_type: {visualization_type}")
+        if content_density in DENSE_DENSITY_VALUES and visualization_type not in DENSE_VISUALIZATION_TYPES:
+            errors.append(
+                f"page_prompts slide {idx + 1} is {content_density} but uses non-dense visualization_type: "
+                f"{visualization_type or '<empty>'}"
+            )
         if not visual_brief:
             errors.append(f"page_prompts slide {idx + 1} missing visual_brief")
         if len(visual_brief) < 24:
@@ -298,6 +345,31 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
         lowered = f"{visual_brief}\n{image_prompt}".lower()
         if any(phrase in lowered for phrase in GENERIC_VISUAL_PHRASES) and len(visual_brief) < 80:
             errors.append(f"page_prompts slide {idx + 1} looks like a generic background prompt")
+        if content_density in DENSE_DENSITY_VALUES and not any(
+            keyword in lowered
+            for keyword in (
+                "hierarchy",
+                "group",
+                "relationship",
+                "compare",
+                "matrix",
+                "flow",
+                "timeline",
+                "metric",
+                "infographic",
+                "层级",
+                "分组",
+                "关系",
+                "对比",
+                "矩阵",
+                "流程",
+                "时间线",
+                "指标",
+                "信息图",
+                "表格可视化",
+            )
+        ):
+            errors.append(f"page_prompts slide {idx + 1} is dense but visual_brief does not describe visual structure")
         if len(page_text) > 90 and len(speaker_notes) < len(page_text):
             warnings.append(f"page_prompts slide {idx + 1} has dense visible text without longer notes")
     return errors, warnings

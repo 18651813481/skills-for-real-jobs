@@ -11,7 +11,7 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 
 - Default to an Image2/gpt-image-2 full-page image deck: every slide is designed as one full-bleed 16:9 image and wrapped in a `.pptx` container. Do not prioritize native text editability unless the user explicitly asks for an editable deck.
 - For `source-to-deck`, always run the source analysis pipeline before writing slides: segment the material, identify relevant and excluded sections, extract claims/evidence/numbers/stakeholders/gaps, then create a structured outline. Do not turn source paragraphs directly into slides.
-- For outline-to-deck, do not pass the outline text directly into slide images. First normalize each slide into `message_brief`, `visible_text`, `speaker_notes`, and `visual_brief`; then generate Image2 prompts from the visual brief. Dense outlines must be compressed, and sparse outlines must be semantically expanded.
+- For outline-to-deck or dense customer PPT redesign, do not pass the source text directly into slide images. First normalize each slide into `message_brief`, `content_density`, `visible_text`, `speaker_notes`, `visualization_type`, and `visual_brief`; then generate Image2 prompts from the visual brief. Dense outlines and PPT slides must be compressed into visual explanations; sparse outlines must be semantically expanded.
 - In the default image deck mode, clearly report that visual quality is prioritized and slide text is not natively editable. If the user explicitly asks for NotebookLM-style, full-image, image deck, visual-first, or "全图像化" output, treat it as confirmation of the default Image2 route and be more aggressive with visual composition.
 - A locally rendered full-slide PNG/JPG is not a substitute for Image2. Do not satisfy the default image-deck requirement by rendering HTML, SVG, canvas, matplotlib, PIL, PPT screenshots, or deterministic local layouts into images unless the user explicitly asks for deterministic rendering or editable/typographic precision over Image2 design.
 - For default deck generation, `image_route: none` is a QA failure. Use `codex_builtin_imagegen` or `tokenlane_image2`, or stop and ask before producing a non-Image2 deck.
@@ -41,7 +41,7 @@ Load these only when relevant:
 - `source-to-deck`: papers, PDFs, academic news, reports, Markdown, webpages, notes, transcripts, or source excerpts into a deck.
 - `outline-to-deck`: user-provided title, sections, bullets, or page plan into structured slides.
 - `chat-to-deck`: user asks in natural language and may want to discuss the deck before generation.
-- `deck-polish`: user provides an existing `.pptx` and wants visual redesign, reflow, images, QA, or narrative improvement.
+- `deck-polish`: user provides an existing `.pptx` and wants visual redesign, reflow, images, QA, narrative improvement, or conversion from text-heavy pages into Image2 visual explanations.
 - `single-slide`: user wants one slide created or revised.
 - `image-deck`: default route for any new deck unless the user explicitly asks for editable PPTX. Includes NotebookLM-like visual output, a whole deck as rendered pages, more effect images, all slides generated as Image2 visuals, or any style where polished full-page imagery matters more than native editability.
 
@@ -106,9 +106,31 @@ Load these only when relevant:
 - Keep Chinese academic wording rigorous, but reduce slide text to presentation-safe phrasing.
 - For every slide, write the normalized fields before image generation:
   - `message_brief`: one sentence explaining what the slide must make the audience understand.
+  - `content_density`: `sparse`, `normal`, `dense`, or `table_heavy`.
   - `visible_text`: one large title plus at most one subtitle, 2-4 labels, or 1-3 big numbers.
   - `speaker_notes`: the detailed original outline content and caveats.
+  - `visualization_type`: one concrete form such as `infographic`, `comparison_matrix`, `workflow`, `timeline`, `metrics_card`, `table_visualization`, `risk_map`, or `concept_map`.
   - `visual_brief`: a specific scene, diagram, workflow, comparison, metaphor, or evidence view that teaches the message.
+
+## Dense PPT Redesign Rules
+
+Use these rules when a customer provides a `.pptx`, PDF, Word brief, or outline with too much visible text, many bullet pages, or tables.
+
+- Treat the original deck as source material, not as a layout template to preserve. Extract each page's intended message, supporting details, table structure, and decision purpose before designing.
+- Do not solve dense Chinese text by switching to local deterministic rendering or editable text-first PPT. Keep the default Image2 image deck route and reduce visible text.
+- For each dense slide, choose one transformation:
+  - `compress`: keep one message and move detail to notes.
+  - `split`: divide one overloaded page into 2-3 visual pages.
+  - `merge`: combine repeated pages into one overview.
+  - `appendix`: move detail-heavy reference material out of the main story.
+- Convert dense content into Image2 visual forms:
+  - bullet-heavy pages -> infographic, concept map, workflow, decision tree, or risk map;
+  - text comparisons -> comparison matrix, before/after, quadrant, or option cards;
+  - schedules and phases -> timeline, roadmap, swimlane, or milestone map;
+  - tables -> table visualization, heatmap-like matrix, scorecard, grouped cards, or annotated grid;
+  - numbers -> metrics cards or 1-3 large number callouts, not exact plotted charts.
+- Preserve exact source text, table values, caveats, and citations in `speaker_notes` and `source_map.json`. The Image2 page should communicate the pattern, hierarchy, contrast, flow, or decision meaning, not reproduce every cell.
+- If a table or chart requires exact axes, exact values, or audit-grade fidelity, create a deterministic chart/table asset only as a factual insert or notes artifact; do not use that as a full-slide local rendering substitute for Image2.
 
 ## Chat-to-Deck Rules
 
@@ -164,7 +186,7 @@ Required authoring artifacts:
 - `authoring/deck_outline.json`: thesis, audience shift, slide list, evidence refs, visual forms, and notes.
 - `authoring/style_spec.json`: style route and exact visual system for the current deck.
 - `authoring/slide_narrative.md`: human-readable slide list, thesis, audience shift, one job per slide, and revision notes.
-- `authoring/page_prompts.json`: one record per slide with `slide_number`, `slide_job`, `page_type`, `page_text`, `visual_format`, `visual_metaphor`, `visual_brief`, `image_prompt`, and `speaker_notes`.
+- `authoring/page_prompts.json`: one record per slide with `slide_number`, `slide_job`, `page_type`, `content_density`, `message_brief`, `page_text`, `visualization_type`, `visual_format`, `visual_metaphor`, `visual_brief`, `image_prompt`, and `speaker_notes`.
 - `authoring/image_manifest.json`: one record per generated slide image proving the actual Image2 route, copied image path, original generated image path, and prompt reference. This file is mandatory for default image decks.
 - `authoring/source_map.json`: source chunks or file sections used by each slide, plus caveats and evidence status.
 
@@ -177,6 +199,7 @@ Page planning rules:
 - The image prompt must include both semantic expansion and text reduction:
   - Dense input: compress visible text, move the rest to notes, and ask Image2 for a visual explanation of the condensed message.
   - Sparse input: expand the meaning into concrete visual objects, relationships, spatial hierarchy, and scene details based on audience and deck narrative.
+- For dense or table-heavy source pages, the prompt must explicitly name the intended `visualization_type` and describe how bullets or table cells become hierarchy, groups, relationships, comparisons, flow, or metrics.
 - Use fixed page types where possible: `big_idea`, `source_quote`, `concept_map`, `timeline`, `comparison`, `workflow`, `metrics`, `risk_next_step`, and `closing`.
 - Do not ask Image2 to fabricate statistical charts, axes, exact tables, logos, signatures, citations, or precise numeric plots. Use conceptual visuals for those pages, and preserve exact facts in notes.
 - Use a shared style lock after the first 1-2 pages: visual language, palette, typography mood, lighting, margin style, and icon/diagram treatment. Reuse it in every page prompt to reduce style drift.
@@ -284,6 +307,7 @@ At minimum, check:
 - AI images are clear enough and not used as fake data charts.
 - Default image decks must have `image_route` equal to `tokenlane_image2` or `codex_builtin_imagegen`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation. The QA report must include `image_route`, `image_route_ok`, and `image_manifest_path`.
 - `page_prompts.json` must show that dense outline text was compressed and sparse outline text was expanded into a concrete visual brief; prompts that only repeat user bullets or only ask for a generic background fail QA.
+- For dense PPT redesign, `page_prompts.json` must mark dense/table-heavy pages with `content_density` and a concrete `visualization_type`; dense source pages without an infographic, matrix, workflow, timeline, metrics card, concept map, or table visualization fail QA.
 - For default image decks, verify that slide count equals image count and narrative page count, every image is 16:9, the montage exists, and the final response says the deck is image-based rather than text-editable.
 - For explicit editable decks, verify that native text, shapes, charts, and tables remain editable where appropriate.
 - For source-grounded decks, verify that `source_map.json` covers the main claims and that unsupported claims are removed or marked as concept draft.
