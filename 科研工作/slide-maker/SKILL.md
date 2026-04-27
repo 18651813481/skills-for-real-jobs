@@ -249,7 +249,7 @@ Image generation rules:
 - Use `--quality high` for cover and important visual pages when budget allows.
 - Use `--filename-prefix` with zero-padded slide numbers, for example `slide-01`, `slide-02`.
 - Save Image2 manifests next to the images; do not include API keys, Authorization headers, or raw `b64_json` in authoring files.
-- For built-in membership mode, after every `image_gen` generation, copy the selected generated file into `images/slide-XX.png` and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
+- For built-in membership mode, do not assume the conversational `image_gen` tool returns a stable file path. Before calling `image_gen`, run `prepare_image2_deck.py --mode builtin-start` to snapshot `${CODEX_HOME:-~/.codex}/generated_images`; after generation, run `--mode builtin-capture` to find the new generated image, copy it into `images/slide-XX.png`, and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
 - Built-in membership `image_gen` is a conversational tool, so long decks must be generated in small resumable batches. Membership mode still uses member `image_gen`; do not switch membership mode to Tokenlane/API to improve stability.
 - For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
 - Tokenlane/API generation is used only in non-membership/API-login contexts. Do not call Tokenlane merely because a member-login `image_gen` run is slow or times out.
@@ -278,7 +278,29 @@ python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --batch-size 3
 ```
 
-For built-in membership mode, generate the next queued slide images with the Codex `image_gen` tool, copy each completed image into `images/slide-XX.png`, then record it:
+For built-in membership mode, generate one slide at a time through the capture workflow. First snapshot the current built-in generated image folder:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route codex_builtin_imagegen \
+  --mode builtin-start \
+  --slide-number 1
+```
+
+Then call the conversational `image_gen` tool with the queued prompt for that slide. After the image is generated, capture the newly created file from `${CODEX_HOME:-~/.codex}/generated_images` and record it:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route codex_builtin_imagegen \
+  --mode builtin-capture \
+  --slide-number 1
+```
+
+If multiple new built-in images were created after the snapshot, `builtin-capture` writes the candidates into `authoring/builtin_imagegen_capture.json` and selects the newest candidate by default. Use `--candidate-index` or `--source-image` only when selecting a different candidate is necessary.
+
+Manual record remains an escape hatch only when the generated image path is already known:
 
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
@@ -333,7 +355,7 @@ Choose the Image2 route from Codex login mode and quota source. Task size does n
 
 Membership timeout mitigation:
 
-- Do not run a long, uninterrupted 10-30 slide membership `image_gen` sequence in one fragile chain. In membership mode, work from `page_prompts.json` in small batches of 1-3 slides, copy outputs into the deck workspace, update `image_manifest.json`, and stop/resume from the first missing `slide-XX.png` when needed.
+- Do not run a long, uninterrupted 10-30 slide membership `image_gen` sequence in one fragile chain. In membership mode, work from `page_prompts.json` in small batches of 1-3 slides, but each slide must go through `builtin-start` before `image_gen` and `builtin-capture` after `image_gen`. The capture step copies outputs into the deck workspace, updates `image_manifest.json`, and lets the run stop/resume from the first missing `slide-XX.png`.
 - Keep each Image2 prompt concise: include the slide's intent, visible text, page type, visual metaphor, style lock, and forbidden patterns; keep long source notes out of the image prompt.
 - If membership `image_gen` times out, do not switch to Tokenlane/API and do not switch to local rendering. Resume the missing slides with the same membership route, or stop and report the upstream timeout.
 
@@ -354,7 +376,7 @@ Recommended Image2 presets:
 - `research-poster`: academic poster visual.
 - `graphical-abstract`: scientific concept visual.
 
-In built-in membership mode, copy selected generated images from Codex's generated image location into the deck workspace before insertion. Never leave project-bound slide images only in the default generated-images location.
+In built-in membership mode, capture selected generated images from Codex's generated image location into the deck workspace before insertion. The manifest record must include `capture_method`, `capture_root`, `source_generated_path`, `source_sha256`, and `captured_at`. Never leave project-bound slide images only in the default generated-images location.
 
 Record the actual image path and `image_route` in the final response:
 

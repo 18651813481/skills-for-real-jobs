@@ -298,6 +298,22 @@ def validate_manifest(
             errors.append(f"slide {idx + 1} missing prompt_ref")
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             errors.append(f"slide {idx + 1} missing source_generated_path/generated_image_path/provider_output_id")
+        if slide_route == "codex_builtin_imagegen":
+            capture_method = str(record.get("capture_method") or "").strip()
+            if capture_method not in {"generated_images_delta", "manual_source_image"}:
+                errors.append(
+                    f"slide {idx + 1} codex_builtin_imagegen missing valid capture_method"
+                )
+            if capture_method == "generated_images_delta" and not record.get("source_generated_path"):
+                errors.append(
+                    f"slide {idx + 1} generated_images_delta capture missing source_generated_path"
+                )
+            if not record.get("capture_root"):
+                errors.append(f"slide {idx + 1} codex_builtin_imagegen missing capture_root")
+            if not record.get("source_sha256"):
+                errors.append(f"slide {idx + 1} codex_builtin_imagegen missing source_sha256")
+            if not record.get("captured_at"):
+                errors.append(f"slide {idx + 1} codex_builtin_imagegen missing captured_at")
         status = str(record.get("generation_status") or "").strip().lower()
         if status not in GOOD_STATUSES:
             errors.append(f"slide {idx + 1} invalid generation_status: {status or '<empty>'}")
