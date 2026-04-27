@@ -36,7 +36,9 @@ GENERIC_VISUAL_PHRASES = [
     "简单背景",
     "纯背景",
 ]
-DENSE_DENSITY_VALUES = {"dense", "table_heavy"}
+DENSE_DENSITY_VALUES = {"dense", "table_heavy", "high_infographic"}
+ALLOWED_DENSITY_VALUES = {"sparse", "normal", "dense", "table_heavy", "high_infographic"}
+ALLOWED_TEXT_RISK_LEVELS = {"low", "medium", "high"}
 ALLOWED_VISUALIZATION_TYPES = {
     "infographic",
     "concept_map",
@@ -81,6 +83,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--page-prompts", required=True, help="authoring/page_prompts.json path.")
     parser.add_argument("--source-map", required=True, help="authoring/source_map.json path.")
     parser.add_argument("--image-manifest", required=True, help="authoring/image_manifest.json path.")
+    parser.add_argument(
+        "--expected-route",
+        choices=sorted(ALLOWED_ROUTES),
+        help="Optional expected route from login mode; fails if manifest route differs.",
+    )
     parser.add_argument("--qa-report", help="Optional validation report JSON path.")
     parser.add_argument("--deck-root", help="Deck workspace root. Defaults to PPTX parent.")
     parser.add_argument(
@@ -264,6 +271,7 @@ def validate_manifest(
         errors.append(f"manifest slide count {len(records)} does not match image count {len(images)}")
 
     image_names = [image["name"] for image in images]
+    slide_routes: list[str] = []
     for idx, record in enumerate(records):
         if not isinstance(record, dict):
             errors.append(f"manifest slide {idx + 1} is not an object")
@@ -272,6 +280,7 @@ def validate_manifest(
         if slide_no != idx + 1:
             errors.append(f"manifest slide {idx + 1} has slide_number={slide_no}")
         slide_route = str(record.get("image_route") or record.get("route") or route).strip()
+        slide_routes.append(slide_route or "none")
         if slide_route not in ALLOWED_ROUTES:
             if allow_non_image2 and approval_path:
                 warnings.append(f"slide {idx + 1} non-Image2 route approved: {slide_route or '<empty>'}")
@@ -297,6 +306,7 @@ def validate_manifest(
         "image_route": route or "none",
         "image_route_ok": route_ok,
         "manifest_slide_count": len(records),
+        "slide_routes": slide_routes,
     }
     return summary, errors, warnings
 
@@ -314,6 +324,9 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
         page_text = str(record.get("page_text") or record.get("visible_text") or "").strip()
         content_density = str(record.get("content_density") or "").strip().lower()
         visualization_type = str(record.get("visualization_type") or "").strip().lower()
+        text_risk_level = str(record.get("text_risk_level") or "").strip().lower()
+        fallback_strategy = str(record.get("fallback_strategy") or "").strip()
+        visible_items = record.get("visible_items")
         visual_brief = str(record.get("visual_brief") or "").strip()
         visual_format = str(record.get("visual_format") or "").strip()
         visual_metaphor = str(record.get("visual_metaphor") or "").strip()
@@ -321,6 +334,8 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
         speaker_notes = str(record.get("speaker_notes") or record.get("notes") or "").strip()
         if not content_density:
             errors.append(f"page_prompts slide {idx + 1} missing content_density")
+        elif content_density not in ALLOWED_DENSITY_VALUES:
+            warnings.append(f"page_prompts slide {idx + 1} uses unrecognized content_density: {content_density}")
         if not visualization_type:
             errors.append(f"page_prompts slide {idx + 1} missing visualization_type")
         elif visualization_type not in ALLOWED_VISUALIZATION_TYPES:
@@ -330,6 +345,22 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
                 f"page_prompts slide {idx + 1} is {content_density} but uses non-dense visualization_type: "
                 f"{visualization_type or '<empty>'}"
             )
+        if visible_items is None:
+            errors.append(f"page_prompts slide {idx + 1} missing visible_items")
+            visible_item_values: list[str] = []
+        elif not isinstance(visible_items, list):
+            errors.append(f"page_prompts slide {idx + 1} visible_items must be a list")
+            visible_item_values = []
+        else:
+            visible_item_values = [str(item).strip() for item in visible_items if str(item).strip()]
+        if content_density in DENSE_DENSITY_VALUES and not visible_item_values:
+            errors.append(f"page_prompts slide {idx + 1} is {content_density} but visible_items is empty")
+        if not text_risk_level:
+            errors.append(f"page_prompts slide {idx + 1} missing text_risk_level")
+        elif text_risk_level not in ALLOWED_TEXT_RISK_LEVELS:
+            warnings.append(f"page_prompts slide {idx + 1} uses unrecognized text_risk_level: {text_risk_level}")
+        if not fallback_strategy:
+            errors.append(f"page_prompts slide {idx + 1} missing fallback_strategy")
         if not visual_brief:
             errors.append(f"page_prompts slide {idx + 1} missing visual_brief")
         if len(visual_brief) < 24:
@@ -343,33 +374,47 @@ def validate_page_prompts(records: list[Any], image_count: int) -> tuple[list[st
         if page_text and visual_brief and visual_brief.replace(" ", "") in page_text.replace(" ", ""):
             errors.append(f"page_prompts slide {idx + 1} visual_brief only repeats visible text")
         lowered = f"{visual_brief}\n{image_prompt}".lower()
-        if any(phrase in lowered for phrase in GENERIC_VISUAL_PHRASES) and len(visual_brief) < 80:
+        structure_keywords = (
+            "hierarchy",
+            "group",
+            "relationship",
+            "compare",
+            "matrix",
+            "flow",
+            "timeline",
+            "metric",
+            "infographic",
+            "panel",
+            "roadmap",
+            "scorecard",
+            "层级",
+            "分组",
+            "关系",
+            "对比",
+            "矩阵",
+            "流程",
+            "时间线",
+            "指标",
+            "信息图",
+            "表格可视化",
+            "分区",
+            "路线图",
+            "卡片",
+        )
+        has_structure = any(keyword in lowered for keyword in structure_keywords)
+        if any(phrase in lowered for phrase in GENERIC_VISUAL_PHRASES) and not has_structure:
             errors.append(f"page_prompts slide {idx + 1} looks like a generic background prompt")
-        if content_density in DENSE_DENSITY_VALUES and not any(
-            keyword in lowered
-            for keyword in (
-                "hierarchy",
-                "group",
-                "relationship",
-                "compare",
-                "matrix",
-                "flow",
-                "timeline",
-                "metric",
-                "infographic",
-                "层级",
-                "分组",
-                "关系",
-                "对比",
-                "矩阵",
-                "流程",
-                "时间线",
-                "指标",
-                "信息图",
-                "表格可视化",
-            )
-        ):
+        if content_density in DENSE_DENSITY_VALUES and not has_structure:
             errors.append(f"page_prompts slide {idx + 1} is dense but visual_brief does not describe visual structure")
+        if visible_item_values:
+            missing_items = [item for item in visible_item_values if item not in image_prompt and item not in page_text]
+            if missing_items:
+                warnings.append(
+                    f"page_prompts slide {idx + 1} visible_items not found in image_prompt/page_text: "
+                    + ", ".join(missing_items[:6])
+                )
+            if len(visible_item_values) >= 6 and text_risk_level != "high":
+                warnings.append(f"page_prompts slide {idx + 1} has many visible_items but text_risk_level is not high")
         if len(page_text) > 90 and len(speaker_notes) < len(page_text):
             warnings.append(f"page_prompts slide {idx + 1} has dense visible text without longer notes")
     return errors, warnings
@@ -422,6 +467,21 @@ def main() -> int:
     )
     errors.extend(manifest_errors)
     warnings.extend(manifest_warnings)
+    if args.expected_route and manifest_summary["image_route"] != args.expected_route:
+        errors.append(
+            f"image_route {manifest_summary['image_route']} does not match expected route {args.expected_route}"
+        )
+    if args.expected_route:
+        bad_slide_routes = [
+            f"{idx + 1}:{route}"
+            for idx, route in enumerate(manifest_summary.get("slide_routes", []))
+            if route != args.expected_route
+        ]
+        if bad_slide_routes:
+            errors.append(
+                "manifest slide routes do not match expected route "
+                f"{args.expected_route}: " + ", ".join(bad_slide_routes[:12])
+            )
 
     image_count = len(images)
     if counts["slides"] != image_count:
@@ -463,6 +523,7 @@ def main() -> int:
         "image_manifest_path": str(manifest_path),
         "image_route": manifest_summary["image_route"],
         "image_route_ok": manifest_summary["image_route_ok"],
+        "slide_routes": manifest_summary["slide_routes"],
         "image_manifest_slide_count": manifest_summary["manifest_slide_count"],
     }
     if args.qa_report:

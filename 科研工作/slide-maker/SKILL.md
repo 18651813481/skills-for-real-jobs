@@ -44,6 +44,7 @@ Load these only when relevant:
 - `deck-polish`: user provides an existing `.pptx` and wants visual redesign, reflow, images, QA, narrative improvement, or conversion from text-heavy pages into Image2 visual explanations.
 - `single-slide`: user wants one slide created or revised.
 - `image-deck`: default route for any new deck unless the user explicitly asks for editable PPTX. Includes NotebookLM-like visual output, a whole deck as rendered pages, more effect images, all slides generated as Image2 visuals, or any style where polished full-page imagery matters more than native editability.
+- `image2_infographic_deck`: user asks for 信息图, infographic, 文字多但要图像化, 信息密度高, 表格可视化, 矩阵, 流程图, 路线图, or wants a dense Word/PDF/PPT/outline converted into structured visual pages. This is still an Image2 full-page image deck, not native editable PPT information graphics.
 
 ## Workflow
 
@@ -66,6 +67,7 @@ Load these only when relevant:
    - QA plan
    - presentation intent: what the audience should understand, believe, compare, decide, or remember
    - visual explanation strategy: how images, spatial hierarchy, diagrams, scenes, and metaphors will teach the intent
+   - infographic strategy when relevant: how dense bullets, tables, stages, options, or responsibilities become an Image2 infographic, matrix, workflow, roadmap, metrics card, or table visualization
 6. Choose backend:
    - Prefer installed `slides` skill if present.
    - Otherwise use `Presentations`.
@@ -75,6 +77,7 @@ Load these only when relevant:
    - Select the route from the Image Route Policy.
    - Use the selected image route for PPT cover, section background, spot illustration, conceptual diagram, research poster, graphical abstract, or full-page image deck slides.
    - Copy final image assets into the deck workspace before insertion.
+   - For long decks, use `scripts/prepare_image2_deck.py` to create a resumable generation queue, record built-in membership `image_gen` outputs, or run Tokenlane/API mode with retries. Do not write one-off full-slide rendering scripts to bypass Image2.
 8. Author the deck:
    - Default mode: one 16:9 Image2-designed image per slide, then use `scripts/build_image_deck.py` to place images full-bleed into a PPTX container.
    - Explicit editable mode: native editable PPTX shapes, text, charts, and images.
@@ -106,11 +109,46 @@ Load these only when relevant:
 - Keep Chinese academic wording rigorous, but reduce slide text to presentation-safe phrasing.
 - For every slide, write the normalized fields before image generation:
   - `message_brief`: one sentence explaining what the slide must make the audience understand.
-  - `content_density`: `sparse`, `normal`, `dense`, or `table_heavy`.
+  - `content_density`: `sparse`, `normal`, `dense`, `table_heavy`, or `high_infographic`.
   - `visible_text`: one large title plus at most one subtitle, 2-4 labels, or 1-3 big numbers.
+  - `visible_items`: the exact Chinese labels that Image2 is allowed to render on the page.
   - `speaker_notes`: the detailed original outline content and caveats.
   - `visualization_type`: one concrete form such as `infographic`, `comparison_matrix`, `workflow`, `timeline`, `metrics_card`, `table_visualization`, `risk_map`, or `concept_map`.
   - `visual_brief`: a specific scene, diagram, workflow, comparison, metaphor, or evidence view that teaches the message.
+  - `text_risk_level`: `low`, `medium`, or `high`, based on how much visible Chinese text the image model must render.
+  - `fallback_strategy`: how to reduce labels and regenerate with the same Image2 route if text readability fails.
+
+## Image2 Infographic Deck Rules
+
+Use `image2_infographic_deck` when the request mentions 信息图, infographic, 文字多, 信息密度高, 表格可视化, 矩阵, 流程图, 路线图, or when the source is a dense customer deck/brief that needs visual redesign.
+
+- "信息图" in this skill means an Image2 full-slide infographic by default. It does not mean native editable PPT shapes unless the user explicitly asks for "可编辑", "原生 PPT", or "文字必须可改".
+- First infer the reporting intent: audience, decision context, what is being compared, what workflow should become clearer, and what the audience should remember. Do not merely condense bullets.
+- Dense pages may carry more visible text than keynote/NotebookLM pages, but text must still be structured as short labels, headings, callouts, step names, or matrix cells. Do not use long paragraphs or tiny footnotes inside the generated image.
+- Use `content_density: "high_infographic"` for pages that intentionally carry many short labels. Pair it with one of: `infographic`, `concept_map`, `workflow`, `comparison_matrix`, `roadmap`, `metrics_card`, `table_visualization`, `scorecard`, `risk_map`, or `decision_tree`.
+- Every prompt for this mode must include:
+  - the exact Simplified Chinese labels in `visible_items`;
+  - the visualization type and page structure;
+  - the relationship being explained: hierarchy, groups, flow, comparison, responsibility split, table pattern, roadmap, or metrics;
+  - "large crisp Simplified Chinese text";
+  - "no English filler text";
+  - "no extra labels";
+  - "no fake charts" when the page mentions data.
+- If Image2 renders Chinese poorly, first reduce `visible_items`, simplify label length, increase text size, and regenerate with the same image route. Do not switch to local deterministic rendering because the content is text-heavy.
+- Put original bullets, exact table values, references, and caveats into `speaker_notes` and `source_map.json`; the Image2 infographic should show the pattern, structure, comparison, workflow, or decision meaning.
+
+Infographic prompt skeleton:
+
+```text
+16:9 full-slide academic infographic.
+Style: [style_spec visual system].
+Page type: [workflow / comparison_matrix / roadmap / concept_map / metrics_card / table_visualization].
+Visible title: "[title]".
+Use these exact Simplified Chinese labels only: "[label1]", "[label2]", ...
+Design: structured infographic with clear panels, hierarchy, arrows, matrix relationships, roadmap stages, metric callouts, or grouped table visualization.
+Meaning: [what the audience should understand after seeing this page].
+Rules: large crisp Simplified Chinese text, all horizontal, generous margins, no English filler text, no extra labels, no logos, no watermark, no fake charts.
+```
 
 ## Dense PPT Redesign Rules
 
@@ -186,7 +224,7 @@ Required authoring artifacts:
 - `authoring/deck_outline.json`: thesis, audience shift, slide list, evidence refs, visual forms, and notes.
 - `authoring/style_spec.json`: style route and exact visual system for the current deck.
 - `authoring/slide_narrative.md`: human-readable slide list, thesis, audience shift, one job per slide, and revision notes.
-- `authoring/page_prompts.json`: one record per slide with `slide_number`, `slide_job`, `page_type`, `content_density`, `message_brief`, `page_text`, `visualization_type`, `visual_format`, `visual_metaphor`, `visual_brief`, `image_prompt`, and `speaker_notes`.
+- `authoring/page_prompts.json`: one record per slide with `slide_number`, `slide_job`, `page_type`, `content_density`, `message_brief`, `page_text`, `visible_items`, `visualization_type`, `visual_format`, `visual_metaphor`, `visual_brief`, `image_prompt`, `text_risk_level`, `fallback_strategy`, and `speaker_notes`.
 - `authoring/image_manifest.json`: one record per generated slide image proving the actual Image2 route, copied image path, original generated image path, and prompt reference. This file is mandatory for default image decks.
 - `authoring/source_map.json`: source chunks or file sections used by each slide, plus caveats and evidence status.
 
@@ -230,6 +268,38 @@ python3 /path/to/slide-maker/scripts/build_image_deck.py \
   --montage "/absolute/path/to/workspace/rendered/montage.svg"
 ```
 
+Resumable Image2 preparation:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route codex_builtin_imagegen \
+  --mode plan \
+  --batch-size 3
+```
+
+For built-in membership mode, generate the next queued slide images with the Codex `image_gen` tool, copy each completed image into `images/slide-XX.png`, then record it:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route codex_builtin_imagegen \
+  --mode record \
+  --slide-number 1 \
+  --source-image "/absolute/path/to/generated-image.png"
+```
+
+For non-membership/API-login mode only, run Tokenlane with long timeout and retries:
+
+```bash
+python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
+  --workspace "/absolute/path/to/workspace" \
+  --route tokenlane_image2 \
+  --mode generate-tokenlane \
+  --timeout 300 \
+  --retries 3
+```
+
 The assembly script must fail if `--image-manifest` is missing or if the manifest route is not `codex_builtin_imagegen` or `tokenlane_image2`. Use `--allow-non-image2` only after the user explicitly approves a non-Image2 fallback.
 
 Final validation command:
@@ -241,10 +311,11 @@ python3 /path/to/slide-maker/scripts/validate_image_deck.py \
   --page-prompts "/absolute/path/to/workspace/authoring/page_prompts.json" \
   --source-map "/absolute/path/to/workspace/authoring/source_map.json" \
   --image-manifest "/absolute/path/to/workspace/authoring/image_manifest.json" \
+  --expected-route codex_builtin_imagegen \
   --qa-report "/absolute/path/to/workspace/qa-report.json"
 ```
 
-Do not deliver a default image deck unless `validate_image_deck.py` exits successfully and the QA report has `valid: true` and `image_route_ok: true`.
+Use `--expected-route codex_builtin_imagegen` for membership mode and `--expected-route tokenlane_image2` for non-membership/API-login mode. Do not deliver a default image deck unless `validate_image_deck.py` exits successfully and the QA report has `valid: true` and `image_route_ok: true`.
 
 Revision rules:
 
@@ -331,7 +402,7 @@ Final response should include:
 ## Failure Handling
 
 - If official `slides` skill is unavailable, use `Presentations` and report that OpenAI curated slides was not available locally.
-- If Image2 fails but built-in image generation is available, use built-in image generation.
-- If both image routes fail, ask before producing the deck without AI images. Do not silently switch to deterministic local rendering for the main deck.
+- If the required Image2 route for the current login mode fails, retry or resume with the same route. Do not switch from membership `image_gen` to Tokenlane, or from API/Tokenlane to membership `image_gen`, just to avoid timeout or quota problems.
+- If the required Image2 route remains unavailable, stop and report the route problem. Ask before producing the deck without AI images. Do not silently switch to deterministic local rendering for the main deck.
 - If source material is insufficient for factual claims, ask for the source or mark the deck as a concept draft.
 - If the user requests NotebookLM specifically, explain that this workflow avoids NotebookLM and stays in Codex.
