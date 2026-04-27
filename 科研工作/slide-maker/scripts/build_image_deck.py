@@ -562,8 +562,8 @@ def main() -> int:
         )
         raise SystemExit(f"non-16:9 slide images found; pass --allow-non-16x9 to continue:\n{bad}")
 
-    route_detection = detect_image_route(args.expected_route or "auto") if args.expected_route else None
-    expected_route = str(route_detection["image_route"]) if route_detection else None
+    route_detection = detect_image_route(args.expected_route or "auto")
+    expected_route = str(route_detection["image_route"])
     manifest = load_image_manifest(
         args.image_manifest,
         images,

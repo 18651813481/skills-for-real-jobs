@@ -251,7 +251,7 @@ Image generation rules:
 - Use `--quality high` for cover and important visual pages when budget allows.
 - Use `--filename-prefix` with zero-padded slide numbers, for example `slide-01`, `slide-02`.
 - Save Image2 manifests next to the images; do not include API keys, Authorization headers, or raw `b64_json` in authoring files.
-- Use `scripts/detect_image_route.py` or `prepare_image2_deck.py --route auto` for route selection. ChatGPT/Codex membership resolves to `codex_builtin_imagegen` even if `auth.json` contains an `OPENAI_API_KEY` field; Tokenlane is for non-membership/API-login mode or explicit Tokenlane route only.
+- Use `scripts/detect_image_route.py` or `prepare_image2_deck.py --route auto` for route selection. ChatGPT/Codex membership resolves to `codex_builtin_imagegen` even if `auth.json` contains an `OPENAI_API_KEY` field; explicit `--route tokenlane_image2` is a route conflict in membership mode and must fail before any Tokenlane call.
 - For built-in membership mode, do not assume the conversational `image_gen` tool returns a stable file path. Before calling `image_gen`, run `prepare_image2_deck.py --mode builtin-start` to snapshot `${CODEX_HOME:-~/.codex}/generated_images`; after generation, run `--mode builtin-capture` to find the new generated image, copy it into `images/slide-XX.png`, and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
 - Built-in membership `image_gen` is a conversational tool, so long decks must be generated in small resumable batches. Membership mode still uses member `image_gen`; do not switch membership mode to Tokenlane/API to improve stability.
 - For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
@@ -334,12 +334,12 @@ python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --source-image "/absolute/path/to/generated-image.png"
 ```
 
-For non-membership/API-login mode only, run Tokenlane with long timeout and retries:
+For non-membership/API-login mode only, run Tokenlane with long timeout and retries. Keep `--route auto` so the script can block accidental Tokenlane calls when the current login is membership mode:
 
 ```bash
 python3 /path/to/slide-maker/scripts/prepare_image2_deck.py \
   --workspace "/absolute/path/to/workspace" \
-  --route tokenlane_image2 \
+  --route auto \
   --mode generate-tokenlane \
   --model gpt-image-2 \
   --timeout 300 \
@@ -373,8 +373,8 @@ Revision rules:
 
 Choose the Image2 route from Codex login mode and quota source. Task size does not change the billing route:
 
-1. If Codex is logged in with normal ChatGPT/Codex membership (`~/.codex/auth.json` has `auth_mode: "chatgpt"` and no active `OPENAI_API_KEY`), always use built-in membership `imagegen` / `image_gen`. Record `image_route: "codex_builtin_imagegen"`.
-2. Only if Codex is in non-membership/API-login mode, or otherwise explicitly configured for API usage, use Tokenlane Image2 by running `/Users/fly/.codex/skills/Image2/scripts/generate_image.py`. Record `image_route: "tokenlane_image2"`.
+1. If Codex is logged in with normal ChatGPT/Codex membership (`~/.codex/auth.json` has `auth_mode: "chatgpt"`), always use built-in membership `imagegen` / `image_gen`. Record `image_route: "codex_builtin_imagegen"`. Do not override this with `--route tokenlane_image2`; the scripts must reject that as a route conflict.
+2. Only if Codex is in non-membership/API-login mode, or otherwise explicitly configured for API usage outside membership mode, use Tokenlane Image2 by running `/Users/fly/.codex/skills/Image2/scripts/generate_image.py`. Record `image_route: "tokenlane_image2"`.
 3. If the required route is unavailable, stop and report the route problem. Do not switch to the other billing route and do not switch to local rendering.
 
 Membership timeout mitigation:

@@ -496,8 +496,8 @@ def main() -> int:
     manifest_path = Path(args.image_manifest).expanduser().resolve()
     deck_root = Path(args.deck_root).expanduser().resolve() if args.deck_root else pptx.parent
     approval_path = require_non_image2_approval(args.non_image2_approval) if args.allow_non_image2 else None
-    route_detection = detect_image_route(args.expected_route or "auto") if args.expected_route else None
-    expected_route = route_detection["image_route"] if route_detection else ""
+    route_detection = detect_image_route(args.expected_route or "auto")
+    expected_route = route_detection["image_route"]
 
     errors: list[str] = []
     warnings: list[str] = []

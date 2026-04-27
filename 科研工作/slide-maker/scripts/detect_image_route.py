@@ -39,18 +39,14 @@ def detect_image_route(
     """Return route detection details.
 
     ChatGPT/Codex membership mode always resolves to built-in image_gen, even
-    when auth.json contains an OPENAI_API_KEY field. Explicit non-auto route
-    arguments still win because they are intentional operator choices.
+    when auth.json contains an OPENAI_API_KEY field. Login mode is the route
+    lock: explicit route arguments cannot switch a membership login to
+    Tokenlane, or an API login to the conversational image_gen route.
     """
 
-    if requested_route in ALLOWED_ROUTES:
-        return {
-            "requested_route": requested_route,
-            "image_route": requested_route,
-            "reason": "explicit_route",
-        }
     if requested_route != "auto":
-        raise SystemExit(f"invalid image route: {requested_route}")
+        if requested_route not in ALLOWED_ROUTES:
+            raise SystemExit(f"invalid image route: {requested_route}")
 
     env_map = env if env is not None else os.environ
     home = Path.home()
@@ -70,10 +66,15 @@ def detect_image_route(
     has_image2_key_file = image2_key.exists() and bool(_read_text(image2_key).strip())
 
     if auth_mode == "chatgpt":
+        if requested_route == "tokenlane_image2":
+            raise SystemExit(
+                "route conflict: ChatGPT/Codex membership login is locked to "
+                "codex_builtin_imagegen; do not call tokenlane_image2 in membership mode"
+            )
         return {
-            "requested_route": "auto",
+            "requested_route": requested_route,
             "image_route": "codex_builtin_imagegen",
-            "reason": "chatgpt_membership",
+            "reason": "chatgpt_membership_route_lock",
             "auth_mode": auth_mode,
             "auth_path": str(auth),
             "config_path": str(config),
@@ -84,11 +85,24 @@ def detect_image_route(
         }
 
     if auth_mode and auth_mode != "chatgpt":
+        if requested_route == "codex_builtin_imagegen":
+            raise SystemExit(
+                "route conflict: non-membership/API login is locked to "
+                "tokenlane_image2; do not call codex_builtin_imagegen in API mode"
+            )
         reason = f"non_membership_auth_mode:{auth_mode}"
         route = "tokenlane_image2"
     elif has_tokenlane_env or has_openai_env or has_tokenlane_config or has_image2_key_file:
+        if requested_route == "codex_builtin_imagegen":
+            raise SystemExit(
+                "route conflict: API/Tokenlane configuration is locked to "
+                "tokenlane_image2; do not call codex_builtin_imagegen in API mode"
+            )
         reason = "api_or_tokenlane_configuration"
         route = "tokenlane_image2"
+    elif requested_route in ALLOWED_ROUTES:
+        reason = "explicit_route_without_login_lock"
+        route = requested_route
     else:
         reason = "no_api_route_detected"
         route = "codex_builtin_imagegen"
