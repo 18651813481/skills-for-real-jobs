@@ -189,7 +189,9 @@ Image generation rules:
 - Use `--filename-prefix` with zero-padded slide numbers, for example `slide-01`, `slide-02`.
 - Save Image2 manifests next to the images; do not include API keys, Authorization headers, or raw `b64_json` in authoring files.
 - For built-in membership mode, after every `image_gen` generation, copy the selected generated file into `images/slide-XX.png` and append a matching `authoring/image_manifest.json` record with `image_route: "codex_builtin_imagegen"`.
+- Built-in membership `image_gen` is a conversational tool, so long decks must be generated in small resumable batches. Membership mode still uses member `image_gen`; do not switch membership mode to Tokenlane/API to improve stability.
 - For Tokenlane/API mode, use the Tokenlane script output manifest and normalize it into `authoring/image_manifest.json` with `image_route: "tokenlane_image2"`.
+- Tokenlane/API generation is used only in non-membership/API-login contexts. Do not call Tokenlane merely because a member-login `image_gen` run is slow or times out.
 - Never create or run a local full-slide rendering script as a substitute for Image2. A Python/PIL, SVG, HTML/canvas, matplotlib, or PPT screenshot generator may only be used for deterministic source charts or explicit user-approved fallback, not for the default slide page images.
 
 Assembly command:
@@ -229,13 +231,19 @@ Revision rules:
 
 ## Image Route Policy
 
-Choose the Image2 route from the Codex login mode, not just from whether Tokenlane credentials exist:
+Choose the Image2 route from Codex login mode and quota source. Task size does not change the billing route:
 
-1. If Codex is logged in with normal ChatGPT/Codex membership (`~/.codex/auth.json` has `auth_mode: "chatgpt"` and no active `OPENAI_API_KEY`), use the built-in `imagegen` skill / `image_gen` tool first. This uses the member account's image quota and should be treated as the default Image2 route in membership login mode.
-2. If Codex is logged in via API key or otherwise configured for API usage, use Tokenlane Image2 by running `/Users/fly/.codex/skills/Image2/scripts/generate_image.py`.
-3. If the preferred route is unavailable, ask before switching to a route that may consume a different quota or API billing source.
+1. If Codex is logged in with normal ChatGPT/Codex membership (`~/.codex/auth.json` has `auth_mode: "chatgpt"` and no active `OPENAI_API_KEY`), always use built-in membership `imagegen` / `image_gen`. Record `image_route: "codex_builtin_imagegen"`.
+2. Only if Codex is in non-membership/API-login mode, or otherwise explicitly configured for API usage, use Tokenlane Image2 by running `/Users/fly/.codex/skills/Image2/scripts/generate_image.py`. Record `image_route: "tokenlane_image2"`.
+3. If the required route is unavailable, stop and report the route problem. Do not switch to the other billing route and do not switch to local rendering.
 
-Tokenlane Image2 is the default only for API-login/API-key contexts. The Image2 script resolves Tokenlane keys in this order:
+Membership timeout mitigation:
+
+- Do not run a long, uninterrupted 10-30 slide membership `image_gen` sequence in one fragile chain. In membership mode, work from `page_prompts.json` in small batches of 1-3 slides, copy outputs into the deck workspace, update `image_manifest.json`, and stop/resume from the first missing `slide-XX.png` when needed.
+- Keep each Image2 prompt concise: include the slide's intent, visible text, page type, visual metaphor, style lock, and forbidden patterns; keep long source notes out of the image prompt.
+- If membership `image_gen` times out, do not switch to Tokenlane/API and do not switch to local rendering. Resume the missing slides with the same membership route, or stop and report the upstream timeout.
+
+Tokenlane Image2 is the default only for non-membership/API-login/API-key contexts. The Image2 script resolves Tokenlane keys in this order:
 
 1. `TOKENLANE_API_KEY`
 2. `IMAGE2_API_KEY`
@@ -274,7 +282,7 @@ At minimum, check:
 - No text overflow, clipped titles, bottom cropping, or unreadable small labels.
 - No overlapping text or images.
 - AI images are clear enough and not used as fake data charts.
-- Default image decks must have `image_route` equal to `codex_builtin_imagegen` or `tokenlane_image2`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation. The QA report must include `image_route`, `image_route_ok`, and `image_manifest_path`.
+- Default image decks must have `image_route` equal to `tokenlane_image2` or `codex_builtin_imagegen`; `none` fails QA unless the user explicitly approved a non-Image2 fallback before generation. The QA report must include `image_route`, `image_route_ok`, and `image_manifest_path`.
 - `page_prompts.json` must show that dense outline text was compressed and sparse outline text was expanded into a concrete visual brief; prompts that only repeat user bullets or only ask for a generic background fail QA.
 - For default image decks, verify that slide count equals image count and narrative page count, every image is 16:9, the montage exists, and the final response says the deck is image-based rather than text-editable.
 - For explicit editable decks, verify that native text, shapes, charts, and tables remain editable where appropriate.
