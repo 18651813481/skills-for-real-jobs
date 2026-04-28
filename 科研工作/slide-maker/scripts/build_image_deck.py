@@ -511,10 +511,14 @@ def write_qa_report(
     authoring_report: dict[str, Any] | None,
 ) -> None:
     authoring_warnings: list[Any] = []
+    deck_contract: dict[str, Any] = {}
     if authoring_report:
         warnings = authoring_report.get("warnings")
         if isinstance(warnings, list):
             authoring_warnings = warnings
+        raw_contract = authoring_report.get("deck_contract")
+        if isinstance(raw_contract, dict):
+            deck_contract = raw_contract
     report = {
         "pptx": str(output),
         "exists": output.exists(),
@@ -530,6 +534,10 @@ def write_qa_report(
         "capture_quality": manifest.capture_quality,
         "authoring_valid": authoring_report.get("valid") if authoring_report else None,
         "authoring_report_path": authoring_report.get("path") if authoring_report else None,
+        "deck_format_ok": authoring_report.get("deck_format_ok") if authoring_report else None,
+        "deck_format": deck_contract.get("deck_format"),
+        "native_editable_requested": authoring_report.get("native_editable_requested") if authoring_report else None,
+        "pptx_backend_role": authoring_report.get("pptx_backend_role") if authoring_report else None,
         "prompt_quality_warnings": authoring_warnings,
         "all_images_16x9": not non_16x9,
         "non_16x9_images": [

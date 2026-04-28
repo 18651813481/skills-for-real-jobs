@@ -77,6 +77,49 @@ DENSE_VISUALIZATION_TYPES = {
 }
 
 
+def validate_deck_contract(deck_root: Path, errors: list[str]) -> dict[str, Any]:
+    path = deck_root / "authoring" / "deck_contract.json"
+    summary = {
+        "path": str(path),
+        "deck_format": None,
+        "image_required": None,
+        "native_editable_requested": None,
+        "pptx_backend_role": None,
+        "deck_format_ok": False,
+    }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        errors.append(f"deck_contract.json not found: {path}")
+        return summary
+    except json.JSONDecodeError as exc:
+        errors.append(f"deck_contract.json invalid JSON: {exc}")
+        return summary
+    if not isinstance(data, dict):
+        errors.append("deck_contract.json must be an object")
+        return summary
+    summary.update(
+        {
+            "deck_format": data.get("deck_format"),
+            "image_required": data.get("image_required"),
+            "native_editable_requested": data.get("native_editable_requested"),
+            "pptx_backend_role": data.get("pptx_backend_role"),
+        }
+    )
+    contract_errors: list[str] = []
+    if data.get("deck_format") != "image_deck":
+        contract_errors.append("deck_contract.json deck_format must be image_deck for image deck validation")
+    if data.get("image_required") is not True:
+        contract_errors.append("deck_contract.json image_required must be true")
+    if data.get("native_editable_requested") is not False:
+        contract_errors.append("deck_contract.json native_editable_requested must be false")
+    if data.get("pptx_backend_role") != "image_container_only":
+        contract_errors.append("deck_contract.json pptx_backend_role must be image_container_only")
+    errors.extend(contract_errors)
+    summary["deck_format_ok"] = not contract_errors
+    return summary
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate a slide-maker Image2 image deck before delivery."
@@ -501,6 +544,7 @@ def main() -> int:
 
     errors: list[str] = []
     warnings: list[str] = []
+    deck_contract = validate_deck_contract(deck_root, errors)
 
     images = find_images(images_dir)
     counts = pptx_counts(pptx)
@@ -575,6 +619,11 @@ def main() -> int:
         "slide_routes": manifest_summary["slide_routes"],
         "capture_quality": manifest_summary["capture_quality"],
         "authoring_valid": None,
+        "deck_format_ok": deck_contract["deck_format_ok"],
+        "deck_format": deck_contract["deck_format"],
+        "native_editable_requested": deck_contract["native_editable_requested"],
+        "pptx_backend_role": deck_contract["pptx_backend_role"],
+        "deck_contract_path": deck_contract["path"],
         "prompt_quality_warnings": prompt_warnings,
         "image_manifest_slide_count": manifest_summary["manifest_slide_count"],
     }

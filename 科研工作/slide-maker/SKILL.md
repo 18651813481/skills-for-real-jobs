@@ -10,6 +10,9 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 ## Core Rules
 
 - Default to an Image2/gpt-image-2 full-page image deck: every slide is designed as one full-bleed 16:9 image and wrapped in a `.pptx` container. Do not prioritize native text editability unless the user explicitly asks for an editable deck.
+- Front-door default: do not start by checking `python-pptx`, `pptxgenjs`, `slides`, or `Presentations` as a way to choose an editable deck. Those tools are packaging or explicit-editable tools only. Without explicit editable wording from the user, any plan that says "check PPT dependencies, then generate editable PPTX" is invalid.
+- For every default deck, write `authoring/deck_contract.json` before image generation with `deck_format: "image_deck"`, `image_required: true`, `native_editable_requested: false`, and `pptx_backend_role: "image_container_only"`.
+- If the user explicitly asks for "可编辑", "原生 PPT", "文字必须可改", "editable", or "native PPT", record that exact trigger in `deck_contract.json` before using native editable PPTX. Do not infer editable mode from academic tone, Chinese text accuracy, local PPT dependencies, or long source material.
 - For `source-to-deck`, always run the source analysis pipeline before writing slides: segment the material, identify relevant and excluded sections, extract claims/evidence/numbers/stakeholders/gaps, then create a structured outline. Do not turn source paragraphs directly into slides.
 - For outline-to-deck or dense customer PPT redesign, do not pass the source text directly into slide images. First normalize each slide into `message_brief`, `content_density`, `visible_text`, `speaker_notes`, `visualization_type`, and `visual_brief`; then generate Image2 prompts from the visual brief. Dense outlines and PPT slides must be compressed into visual explanations; sparse outlines must be semantically expanded.
 - In the default image deck mode, clearly report that visual quality is prioritized and slide text is not natively editable. If the user explicitly asks for NotebookLM-style, full-image, image deck, visual-first, or "全图像化" output, treat it as confirmation of the default Image2 route and be more aggressive with visual composition.
@@ -20,10 +23,10 @@ Use this skill when the user wants to create, plan, polish, or QA a PowerPoint d
 - If the current prompt explicitly asks for "Apple 发布会风格", "Apple keynote style", "发布会风格", "keynote", "premium launch", "视觉精致", or otherwise prioritizes cinematic/polished full-page visuals, treat that current deck as visual-first and use the NotebookLM-style image deck workflow with Image2/gpt-image-2 by default, unless the user explicitly says the slide text must remain natively editable. This is prompt-scoped and must not carry over to unrelated documents.
 - Do not use screenshots, HTML, PDF, or a webpage as the main deliverable. The default deliverable is a `.pptx` image deck; use native editable `.pptx` only when the user explicitly asks for editable text/shapes/charts.
 - Do not use NotebookLM or require a NotebookLM account.
-- Use the best available PPTX authoring backend in this order:
-  1. If an OpenAI `slides` skill is installed locally, use it for PptxGenJS authoring, rendering, and validation.
-  2. Otherwise use the built-in `Presentations` plugin skill for PPTX creation, rendering, verification, and export.
-  3. If neither route is available, use `scripts/build_image_deck.py` for image deck assembly when possible; otherwise stop and explain the missing deck authoring backend.
+- Use PPTX tooling only according to the deck contract:
+  1. Default `image_deck`: use `scripts/build_image_deck.py`, `slides`, or `Presentations` only to wrap finished Image2/image_gen slide images into a `.pptx` container and verify the package.
+  2. Explicit `editable_pptx`: use native editable text/shapes/charts only after `deck_contract.json` records the user's editable trigger.
+  3. If image deck assembly tooling is unavailable, stop and explain the missing container backend; do not switch to editable slides.
 - For image assets, follow the Image Route Policy below. The route depends on Codex login mode and quota source, not merely on whether Tokenlane credentials exist.
 - Do not use Image2 or any image generator for true data charts, axes, statistical figures, or factual scientific plots. Use deterministic tools, rendered chart images, or native PPT charts/tables for real data.
 - Before generating a full deck from only a vague topic, ask for missing high-impact intent details unless the user asks to proceed directly. If they do not want to answer, default to an 8-slide Chinese academic clean image deck.
@@ -55,6 +58,7 @@ Load these only when relevant:
    - `authoring/content_brief.json`
    - `authoring/deck_outline.json`
    - `authoring/source_map.json`
+   - `authoring/deck_contract.json`
 4. Choose and record the style:
    - If the user specified a style, follow it for this deck only.
    - If no style is specified, infer the most suitable style from source type, audience, purpose, and viewing context.
@@ -70,9 +74,8 @@ Load these only when relevant:
    - visual explanation strategy: how images, spatial hierarchy, diagrams, scenes, and metaphors will teach the intent
    - infographic strategy when relevant: how dense bullets, tables, stages, options, or responsibilities become an Image2 infographic, matrix, workflow, roadmap, metrics card, or table visualization
 6. Choose backend:
-   - Prefer installed `slides` skill if present.
-   - Otherwise use `Presentations`.
-   - By default, skip editable-slide authoring as the main route and use Image2 plus `scripts/build_image_deck.py`; the PPTX backend is only the image container.
+   - Read `authoring/deck_contract.json` first. The default contract is `image_deck`; do not probe editable PPTX dependencies before this decision.
+   - By default, skip editable-slide authoring as the main route and use Image2 plus `scripts/build_image_deck.py`; any PPTX backend is only the image container.
    - If the user explicitly asks for editable text/shapes/charts, use native editable PPTX authoring instead and state the tradeoff in visual freedom.
 7. Generate or gather visual assets:
    - Select the route from the Image Route Policy.
@@ -222,6 +225,7 @@ Prompt-scoped Apple/keynote-style behavior:
 
 Required authoring artifacts:
 
+- `authoring/deck_contract.json`: deck format contract. Default: `deck_format: "image_deck"`, `image_required: true`, `native_editable_requested: false`, and `pptx_backend_role: "image_container_only"`.
 - `authoring/content_brief.json`: material scope, included/excluded sections, key facts, numbers, stakeholders, conflicts/gaps, and recommended deck angle.
 - `authoring/deck_outline.json`: thesis, audience shift, slide list, evidence refs, visual forms, and notes.
 - `authoring/style_spec.json`: style route and exact visual system for the current deck.
@@ -281,6 +285,8 @@ python3 /path/to/slide-maker/scripts/validate_authoring.py \
   --workspace "/absolute/path/to/workspace" \
   --report "/absolute/path/to/workspace/authoring/authoring_qa.json"
 ```
+
+The authoring validator must fail if `deck_contract.json` is missing, if default decks are marked editable, or if `style_spec.format` conflicts with the contract. Do not generate images or build a PPTX until this passes.
 
 Resumable Image2 preparation:
 

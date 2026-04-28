@@ -66,35 +66,35 @@ Always use these fields.
 
 ### `academic_clean`
 
-- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability.
+- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability and `deck_contract.json` records the user's editable trigger.
 - Visual DNA: precise, restrained, citation-aware, calm.
 - Layout grammar: claim + evidence, method diagrams, readable charts/tables, appendix for density.
 - Forbidden patterns: invented visuals, vague claims, over-stylized backgrounds that reduce trust.
 
 ### `formal_work_report`
 
-- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability.
+- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability and `deck_contract.json` records the user's editable trigger.
 - Visual DNA: structured, decision-oriented, restrained visual hierarchy.
 - Layout grammar: issue, evidence, option, risk, next action.
 - Forbidden patterns: playful tone, cinematic excess, text-heavy source dumps.
 
 ### `teaching_explainer`
 
-- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability.
+- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability and `deck_contract.json` records the user's editable trigger.
 - Visual DNA: friendly, stepwise, clear mental models.
 - Layout grammar: concept introduction, example, guided diagram, recap.
 - Forbidden patterns: executive consulting templates, unexplained jargon, overloaded diagrams.
 
 ### `whiteboard_explainer`
 
-- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability.
+- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability and `deck_contract.json` records the user's editable trigger.
 - Visual DNA: sketch-like clarity, hand-drawn logic, simple arrows.
 - Layout grammar: problem -> mechanism -> implication.
 - Forbidden patterns: polished marketing look, tiny labels, complex dashboards.
 
 ### `magazine_infographic`
 
-- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability.
+- Format: default `image_deck`; use `editable_pptx` only when the user explicitly asks for native editability and `deck_contract.json` records the user's editable trigger.
 - Visual DNA: editorial hierarchy, strong facts, charts and callouts.
 - Layout grammar: headline, visual evidence, annotated detail.
 - Forbidden patterns: stock template grids, unsupported statistics, decorative-only art.

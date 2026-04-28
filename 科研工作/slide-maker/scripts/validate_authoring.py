@@ -31,6 +31,12 @@ REQUIRED_STYLE_SPEC = {
     "image_prompt_rules",
     "forbidden_patterns",
 }
+REQUIRED_DECK_CONTRACT = {
+    "deck_format",
+    "image_required",
+    "native_editable_requested",
+    "pptx_backend_role",
+}
 ALLOWED_DENSITY_VALUES = {"sparse", "normal", "dense", "table_heavy", "high_infographic"}
 ALLOWED_TEXT_RISK_LEVELS = {"low", "medium", "high"}
 DENSE_DENSITY_VALUES = {"dense", "table_heavy", "high_infographic"}
@@ -103,12 +109,19 @@ STRUCTURE_KEYWORDS = {
     "路线图",
     "卡片",
 }
+EDITABLE_TRIGGER_FIELDS = {
+    "editable_trigger",
+    "editable_request_evidence",
+    "user_editable_request",
+    "explicit_editable_request",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate slide-maker authoring artifacts.")
     parser.add_argument("--workspace", required=True, help="Deck workspace root.")
     parser.add_argument("--content-brief", help="Defaults to <workspace>/authoring/content_brief.json.")
+    parser.add_argument("--deck-contract", help="Defaults to <workspace>/authoring/deck_contract.json.")
     parser.add_argument("--deck-outline", help="Defaults to <workspace>/authoring/deck_outline.json.")
     parser.add_argument("--style-spec", help="Defaults to <workspace>/authoring/style_spec.json.")
     parser.add_argument("--page-prompts", help="Defaults to <workspace>/authoring/page_prompts.json.")
@@ -179,6 +192,82 @@ def validate_style_spec(data: Any, errors: list[str]) -> None:
         errors.append("style_spec.json palette must be an object")
     if not isinstance(data.get("page_roles"), dict):
         errors.append("style_spec.json page_roles must be an object")
+
+
+def validate_deck_contract(data: Any, style_spec: Any, errors: list[str]) -> dict[str, Any]:
+    summary = {
+        "deck_format": None,
+        "image_required": None,
+        "native_editable_requested": None,
+        "pptx_backend_role": None,
+        "editable_trigger": "",
+        "deck_format_ok": False,
+    }
+    if not isinstance(data, dict):
+        errors.append("deck_contract.json must be an object")
+        return summary
+
+    missing = sorted(REQUIRED_DECK_CONTRACT - set(data))
+    if missing:
+        errors.append("deck_contract.json missing fields: " + ", ".join(missing))
+
+    deck_format = str(data.get("deck_format") or "").strip()
+    image_required = data.get("image_required")
+    native_editable_requested = data.get("native_editable_requested")
+    pptx_backend_role = str(data.get("pptx_backend_role") or "").strip()
+    editable_trigger = next(
+        (
+            str(data.get(key) or "").strip()
+            for key in EDITABLE_TRIGGER_FIELDS
+            if str(data.get(key) or "").strip()
+        ),
+        "",
+    )
+    summary.update(
+        {
+            "deck_format": deck_format,
+            "image_required": image_required,
+            "native_editable_requested": native_editable_requested,
+            "pptx_backend_role": pptx_backend_role,
+            "editable_trigger": editable_trigger,
+        }
+    )
+
+    if deck_format not in {"image_deck", "editable_pptx"}:
+        errors.append(f"deck_contract.json deck_format must be image_deck or editable_pptx; got {deck_format or '<empty>'}")
+    if not isinstance(image_required, bool):
+        errors.append("deck_contract.json image_required must be a boolean")
+    if not isinstance(native_editable_requested, bool):
+        errors.append("deck_contract.json native_editable_requested must be a boolean")
+    if pptx_backend_role not in {"image_container_only", "native_editable_authoring"}:
+        errors.append(
+            "deck_contract.json pptx_backend_role must be image_container_only or native_editable_authoring"
+        )
+
+    if deck_format == "image_deck":
+        if image_required is not True:
+            errors.append("deck_contract.json image_deck requires image_required: true")
+        if native_editable_requested is not False:
+            errors.append("deck_contract.json image_deck requires native_editable_requested: false")
+        if pptx_backend_role != "image_container_only":
+            errors.append("deck_contract.json image_deck requires pptx_backend_role: image_container_only")
+    elif deck_format == "editable_pptx":
+        if native_editable_requested is not True:
+            errors.append("deck_contract.json editable_pptx requires native_editable_requested: true")
+        if pptx_backend_role != "native_editable_authoring":
+            errors.append("deck_contract.json editable_pptx requires pptx_backend_role: native_editable_authoring")
+        if not editable_trigger:
+            errors.append("deck_contract.json editable_pptx requires an explicit editable trigger/evidence field")
+
+    if isinstance(style_spec, dict):
+        style_format = str(style_spec.get("format") or "").strip()
+        if style_format and deck_format and style_format != deck_format:
+            errors.append(f"style_spec.json format {style_format} conflicts with deck_contract deck_format {deck_format}")
+        if style_format == "editable_pptx" and not editable_trigger:
+            errors.append("style_spec.json editable_pptx requires explicit editable trigger in deck_contract.json")
+
+    summary["deck_format_ok"] = not any("deck_contract.json" in error or "style_spec.json format" in error for error in errors)
+    return summary
 
 
 def validate_deck_outline(data: Any, errors: list[str]) -> list[dict[str, Any]]:
@@ -274,6 +363,7 @@ def main() -> int:
     authoring = workspace / "authoring"
     paths = {
         "content_brief": Path(args.content_brief).expanduser().resolve() if args.content_brief else authoring / "content_brief.json",
+        "deck_contract": Path(args.deck_contract).expanduser().resolve() if args.deck_contract else authoring / "deck_contract.json",
         "deck_outline": Path(args.deck_outline).expanduser().resolve() if args.deck_outline else authoring / "deck_outline.json",
         "style_spec": Path(args.style_spec).expanduser().resolve() if args.style_spec else authoring / "style_spec.json",
         "page_prompts": Path(args.page_prompts).expanduser().resolve() if args.page_prompts else authoring / "page_prompts.json",
@@ -282,6 +372,7 @@ def main() -> int:
     errors: list[str] = []
     warnings: list[str] = []
     content_brief = read_json(paths["content_brief"], errors, "content_brief.json")
+    deck_contract = read_json(paths["deck_contract"], errors, "deck_contract.json")
     deck_outline = read_json(paths["deck_outline"], errors, "deck_outline.json")
     style_spec = read_json(paths["style_spec"], errors, "style_spec.json")
     page_prompts = read_json(paths["page_prompts"], errors, "page_prompts.json")
@@ -291,6 +382,18 @@ def main() -> int:
         validate_content_brief(content_brief, errors)
     if style_spec is not None:
         validate_style_spec(style_spec, errors)
+    contract_summary = (
+        validate_deck_contract(deck_contract, style_spec, errors)
+        if deck_contract is not None
+        else {
+            "deck_format": None,
+            "image_required": None,
+            "native_editable_requested": None,
+            "pptx_backend_role": None,
+            "editable_trigger": "",
+            "deck_format_ok": False,
+        }
+    )
     outline_slides = validate_deck_outline(deck_outline, errors) if deck_outline is not None else []
     slide_count = len(outline_slides)
     if page_prompts is not None:
@@ -305,6 +408,10 @@ def main() -> int:
         "workspace": str(workspace),
         "paths": {key: str(path) for key, path in paths.items()},
         "slide_count": slide_count,
+        "deck_contract": contract_summary,
+        "deck_format_ok": bool(contract_summary.get("deck_format_ok")) and not errors,
+        "native_editable_requested": contract_summary.get("native_editable_requested"),
+        "pptx_backend_role": contract_summary.get("pptx_backend_role"),
     }
     if args.report:
         report_path = Path(args.report).expanduser().resolve()
