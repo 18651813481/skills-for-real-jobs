@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex Config Fixer"
+  short_description: "修复 Codex 客户 config.toml 并输出可复制模板"
+  default_prompt: "使用 $codex-config-fixer 修复客户贴来的 Codex config.toml："
+policy:
+  allow_implicit_invocation: true
