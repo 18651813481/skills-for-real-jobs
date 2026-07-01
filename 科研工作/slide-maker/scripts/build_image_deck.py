@@ -300,7 +300,7 @@ def load_image_manifest(
         )
     if not route_ok and allow_non_image2:
         warnings.append(f"non-Image2 route explicitly approved: {route or '<empty>'}")
-    if expected_route and route != expected_route:
+    if expected_route and route != expected_route and (route_ok or not allow_non_image2):
         raise SystemExit(f"image_route {route or '<empty>'} does not match expected route {expected_route}")
 
     if len(records) != len(images):
@@ -325,7 +325,7 @@ def load_image_manifest(
                 warnings.append(message)
             else:
                 raise SystemExit(message)
-        if expected_route and slide_route != expected_route:
+        if expected_route and slide_route != expected_route and (slide_route in ALLOWED_ROUTES or not allow_non_image2):
             raise SystemExit(f"slide {idx + 1} route {slide_route or '<empty>'} does not match expected route {expected_route}")
         image_value = (
             record.get("image")
@@ -346,9 +346,13 @@ def load_image_manifest(
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             raise SystemExit(f"image manifest slide {idx + 1} missing source/generated/provider id")
         image_model = str(record.get("image_model") or record.get("model") or "").strip()
-        if image_model != REQUIRED_IMAGE2_MODEL:
+        if slide_route in ALLOWED_ROUTES and image_model != REQUIRED_IMAGE2_MODEL:
             raise SystemExit(
                 f"image manifest slide {idx + 1} image_model must be {REQUIRED_IMAGE2_MODEL}; got {image_model or '<empty>'}"
+            )
+        if slide_route not in ALLOWED_ROUTES and allow_non_image2:
+            warnings.append(
+                f"slide {idx + 1} non-Image2 model accepted by approval: {image_model or '<empty>'}"
             )
         if slide_route == "tokenlane_image2":
             model_lock = str(record.get("model_lock") or image_model).strip()
@@ -642,7 +646,7 @@ def main() -> int:
             ensure_ascii=False,
         )
     )
-    return 0 if manifest.route_ok else 2
+    return 0 if (manifest.route_ok or args.allow_non_image2) else 2
 
 
 if __name__ == "__main__":

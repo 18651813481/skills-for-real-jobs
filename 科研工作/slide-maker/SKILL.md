@@ -1,11 +1,11 @@
 ---
 name: "slide maker"
-description: "把资料、文字大纲或自然语言需求生成 PPTX，适合中文学术科研、组会、课程、讲座、论文解读、科研进展汇报和工作项目汇报。使用本技能时必须先把材料结构化提炼成大纲和证据映射，再选择最合适的风格。默认使用 Image2/gpt-image-2 对每页做整页视觉设计并封装为 image deck PPTX，不优先保证文字可编辑；只有用户明确要求可编辑时才输出原生可编辑 PPTX。"
+description: "把资料、文字大纲或自然语言需求生成、改造、美化或 QA 成 PPTX。适合中文学术科研、课程讲座、论文解读、工作汇报，也适合客户 PPT 美化、商业方案、展厅概念方案、纯文字稿图像化、目录页/正文页信息图重做，以及把成熟 PPT 美化流程交给同事复用。使用本技能时必须先把材料结构化为大纲、证据映射和每页 visual brief，再选择风格。默认使用 Image2/gpt-image-2 对每页做整页视觉设计并封装为 image deck PPTX，不优先保证文字可编辑；只有用户明确要求可编辑时才输出原生可编辑 PPTX。"
 ---
 
 # slide maker
 
-Use this skill when the user wants to create, plan, polish, or QA a PowerPoint deck from sources, an outline, or a conversational brief. The default audience is Chinese academic and research work: paper interpretation, lab meeting, research progress, course lecture, academic news briefing, and seminar slides.
+Use this skill when the user wants to create, plan, polish, or QA a PowerPoint deck from sources, an outline, or a conversational brief. It covers Chinese academic/research decks, work reports, customer-facing business proposals, exhibition-hall concept decks, and dense text decks that need visual redesign or Image2 infographic treatment.
 
 ## Core Rules
 
@@ -39,6 +39,7 @@ Load these only when relevant:
 - `references/content_pipeline.md`: required for `source-to-deck`, mixed documents, source-grounded decks, and any task where material must be summarized into an outline.
 - `references/style_specs.md`: required when selecting a style, generating `style_spec.json`, or when the user has no explicit style prompt.
 - `references/notebooklm_image_deck.md`: required for default Image2 image decks, NotebookLM-style, full-image, Apple/keynote, visual-first, or any Image2 whole-page deck.
+- `references/customer_ppt_polish.md`: required for customer PPT polish, business/exhibition proposal redesign, formal report decks, dense source PPTs, "更高级/更屌/设计感/发布会/杂志风" feedback, contents-page redesign, source-copy preservation, sample-first approval, and handoff to colleagues.
 
 ## Request Classes
 
@@ -59,11 +60,12 @@ Load these only when relevant:
    - `authoring/deck_outline.json`
    - `authoring/source_map.json`
    - `authoring/deck_contract.json`
-4. Choose and record the style:
+4. For `deck-polish` or `image2_infographic_deck` on customer-facing source decks, load `references/customer_ppt_polish.md` and create a page-level copy map before choosing page prompts. This reference is the operating checklist for preserving source wording, redesigning page roles, sample gating, locking approved pages, and handoff.
+5. Choose and record the style:
    - If the user specified a style, follow it for this deck only.
    - If no style is specified, infer the most suitable style from source type, audience, purpose, and viewing context.
    - Write `authoring/style_spec.json` with the exact fields defined in `references/style_specs.md`.
-5. Create a slide narrative before authoring:
+6. Create a slide narrative before authoring:
    - thesis
    - audience shift
    - slide list
@@ -73,22 +75,22 @@ Load these only when relevant:
    - presentation intent: what the audience should understand, believe, compare, decide, or remember
    - visual explanation strategy: how images, spatial hierarchy, diagrams, scenes, and metaphors will teach the intent
    - infographic strategy when relevant: how dense bullets, tables, stages, options, or responsibilities become an Image2 infographic, matrix, workflow, roadmap, metrics card, or table visualization
-6. Choose backend:
+7. Choose backend:
    - Read `authoring/deck_contract.json` first. The default contract is `image_deck`; do not probe editable PPTX dependencies before this decision.
    - By default, skip editable-slide authoring as the main route and use Image2 plus `scripts/build_image_deck.py`; any PPTX backend is only the image container.
    - If the user explicitly asks for editable text/shapes/charts, use native editable PPTX authoring instead and state the tradeoff in visual freedom.
-7. Generate or gather visual assets:
+8. Generate or gather visual assets:
    - Select the route from the Image Route Policy.
    - Use the selected image route for PPT cover, section background, spot illustration, conceptual diagram, research poster, graphical abstract, or full-page image deck slides.
    - Copy final image assets into the deck workspace before insertion.
    - Before image generation, run `scripts/validate_authoring.py` so weak outlines, generic prompts, missing source maps, or missing style specs fail early.
    - For long decks, use `scripts/prepare_image2_deck.py --route auto` to create a resumable generation queue, record built-in membership `image_gen` outputs, or run Tokenlane/API mode with retries. Do not write one-off full-slide rendering scripts to bypass Image2.
-8. Author the deck:
+9. Author the deck:
    - Default mode: one 16:9 Image2-designed image per slide, then use `scripts/build_image_deck.py` to place images full-bleed into a PPTX container.
    - Explicit editable mode: native editable PPTX shapes, text, charts, and images.
-9. Render and QA.
-10. Run Content / Design / Coherence QA.
-11. Return paths and a short status summary.
+10. Render and QA.
+11. Run Content / Design / Coherence QA.
+12. Return paths and a short status summary.
 
 ## Source-to-Deck Rules
 
@@ -174,6 +176,29 @@ Use these rules when a customer provides a `.pptx`, PDF, Word brief, or outline 
   - numbers -> metrics cards or 1-3 large number callouts, not exact plotted charts.
 - Preserve exact source text, table values, caveats, and citations in `speaker_notes` and `source_map.json`. The Image2 page should communicate the pattern, hierarchy, contrast, flow, or decision meaning, not reproduce every cell.
 - If a table or chart requires exact axes, exact values, or audit-grade fidelity, create a deterministic chart/table asset only as a factual insert or notes artifact; do not use that as a full-slide local rendering substitute for Image2.
+
+## Customer PPT Polish Rules
+
+Use these rules when polishing or redesigning customer-facing PPTs, especially business proposals, exhibition halls, commercial reports, and client communication decks.
+
+- Load `references/customer_ppt_polish.md` for the operational SOP. Use it as the checklist for page-role grammar, source-copy mapping, sample-first workflow, lock/regenerate decisions, Image2 prompt requirements, contact-sheet QA, and colleague handoff.
+- Separate internal design language from visible slide copy. Terms such as "five-stage report rhythm", "layout-v2", "visual lock", "agenda moment", or other agent planning phrases belong in authoring files, not on the customer-facing slide, unless they appeared in the source or the user explicitly asks for them.
+- Preserve conventional business slide titles when they are expected. For Chinese customer PPTs, a contents page from an existing deck should normally keep the visible title as `目录`; section dividers should keep source-grounded section names such as `基本情况概括`. Do not invent clever titles just to explain the design concept.
+- Do not treat a redesign request as a palette swap. Before image generation, each redesigned page prompt must state how the composition changes from the source or prior sample, such as diagonal brand band, editorial index, split visual hierarchy, full-bleed hero, vertical spine, large typographic crop, matrix, or roadmap. If the prompt keeps the same spatial structure and only changes color, revise it before generation.
+- If the user asks for `发布会`, `杂志风`, `设计感`, `亮堂`, or says the current result is too heavy/hard, reduce heavy dark-metal styling and define a new layout grammar, not only a lighter palette.
+- If the user says the result is bright enough but lacks design quality or readability, add content-bearing composition, not more decoration. For contents pages or section overviews, image-and-text editorial cards are acceptable and often better than a pure index: each card should carry a representative thumbnail/scene, a formal chapter title, and a short source-grounded hint. Avoid only blank/text-only template cards, tiny paragraphs, or card grids that merely repeat the old outline.
+- For formal contents pages, keep the page function unmistakable. A contents page may use editorial image cards, but it must still read as `目录`: clear chapter numbers, chapter titles, subtitles, and navigational hierarchy. Do not turn a contents page into a second cover, a physical exhibition wall rendering, a full-room hero scene, or a generic promotional poster.
+- For visual-first customer decks, define page-role image grammar before continuing a batch. Covers may use a strong hero scene; contents, section dividers, and body pages must use different visual roles such as index cards, chapter transition, capability map, information wall, floorplan journey, moodboard, matrix, or roadmap. Do not reuse the same showroom hall, sandbox, dashboard wall, map screen, or thumbnail as the main visual across adjacent pages.
+- When a user approves one sample page but rejects another, lock the approved page and regenerate only the rejected page(s). Preserve the accepted page's file and manifest record unless the user asks for a full restyle. Update `style_spec.json` and `page_prompts.json` before regenerating, so the failure becomes a forbidden pattern rather than a one-off prompt tweak.
+- When polishing a customer PPT, preserve source copy deliberately. Do not keep only big titles while dropping body text. Convert source body copy into visible infographic material where possible: short source-grounded labels, tag rows, callouts, mini matrices, journey cards, capability maps, or annotated scene cards. Full paragraphs, exact table values, and dense caveats still belong in speaker notes/source maps unless the user explicitly asks for editable or deterministic text fidelity.
+- For formal Chinese customer reports, interpret requests such as `更屌`, `更高级`, or `设计感更强` as premium, mature, and stable unless the user explicitly asks for a trendy/experimental poster style. Covers, contents pages, and section dividers should keep conventional report hierarchy, steady title typography, and enough white space for leadership/client review.
+- Never hallucinate a customer logo. If the source deck only contains a `logo` placeholder or no extractable logo asset, omit the logo entirely. Use a logo only when a real source image/vector asset is available or the user provides it.
+- If the user explicitly requires visible slide copy to preserve source wording without paraphrase, treats Image2 Chinese text as too risky, or rejects generated fake logos, this counts as typographic-precision approval. In that case, a non-Image2 full-slide fallback may compose Image2 visual assets with deterministic local text rendering. Record `authoring/non_image2_approval.json`, set `image_route: "deterministic_text_overlay"`, run build/validation with `--allow-non-image2`, and explain in the final response that this is an image deck with exact rendered text rather than native editable text.
+- Oversized numbers, background numerals, decorative codes, and issue-like typography must be self-explanatory to the audience. Use them only when their meaning is explicit on the page or obvious from the source. Do not place a huge `05` on a contents slide merely to indicate five sections; normal small chapter numbering is acceptable.
+- For directory/contents pages, prefer a clean `目录` title plus readable section list, index, or navigation structure. Avoid unexplained visual gimmicks, hidden meanings, or labels that sound like an agent's analysis rather than a client's deck.
+- When the user rejects a sample, update the style lock, forbidden patterns, and page prompts before regenerating. Do not continue the same structure with minor color or texture changes.
+- Before accepting a generated customer slide into `image_manifest.json`, inspect it for obvious brand, text, and composition failures. If it repeats a forbidden hero visual, invents a logo, adds extra slogan text, garbles the main title, or stops behaving like the intended page type, reject that candidate, tighten the prompt/style lock, rerun `builtin-start`, and regenerate before capture.
+- Contact-sheet QA for customer PPT polish must include a composition check: confirm that page layouts actually changed where requested, visible titles are client-appropriate, large symbols are explained, no internal authoring terms leaked into slide text, and adjacent pages do not reuse the same main generated image or hero scene unless that repetition is intentional and source-grounded.
 
 ## Chat-to-Deck Rules
 
@@ -436,8 +461,9 @@ At minimum, check:
 - For source-grounded decks, verify that `source_map.json` covers the main claims and that unsupported claims are removed or marked as concept draft.
 - Run a lightweight rubric:
   - Content: source-grounded claims, clear thesis, relevant included sections, no unrelated source cargo.
-  - Design: follows `style_spec.json`, uses visual explanation rather than decorative background-only pages, avoids forbidden patterns.
+  - Design: follows `style_spec.json`, uses visual explanation rather than decorative background-only pages, avoids forbidden patterns, and for customer PPT polish checks that the result is not merely a color swap.
   - Coherence: consistent visual system, meaningful slide progression, no repeated slide jobs unless intentional.
+- For customer-facing decks, review visible copy separately from design prompts: titles should sound like normal client PPT language, not internal agent planning language; unexplained large background numbers or decorative codes should be removed or made explicit.
 
 Final response should include:
 

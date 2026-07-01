@@ -351,9 +351,13 @@ def validate_manifest(
         if not (record.get("source_generated_path") or record.get("generated_image_path") or record.get("provider_output_id")):
             errors.append(f"slide {idx + 1} missing source_generated_path/generated_image_path/provider_output_id")
         image_model = str(record.get("image_model") or record.get("model") or "").strip()
-        if image_model != REQUIRED_IMAGE2_MODEL:
+        if slide_route in ALLOWED_ROUTES and image_model != REQUIRED_IMAGE2_MODEL:
             errors.append(
                 f"slide {idx + 1} image_model must be {REQUIRED_IMAGE2_MODEL}; got {image_model or '<empty>'}"
+            )
+        if slide_route not in ALLOWED_ROUTES and allow_non_image2 and approval_path:
+            warnings.append(
+                f"slide {idx + 1} non-Image2 model accepted by approval: {image_model or '<empty>'}"
             )
         if slide_route == "tokenlane_image2":
             model_lock = str(record.get("model_lock") or image_model).strip()
@@ -558,11 +562,18 @@ def main() -> int:
     )
     errors.extend(manifest_errors)
     warnings.extend(manifest_warnings)
+    approved_non_image2_route = (
+        args.allow_non_image2
+        and approval_path
+        and manifest_summary["image_route"] not in ALLOWED_ROUTES
+    )
     if expected_route and manifest_summary["image_route"] != expected_route:
-        errors.append(
-            f"image_route {manifest_summary['image_route']} does not match expected route {expected_route}"
-        )
-    if expected_route:
+        message = f"image_route {manifest_summary['image_route']} does not match expected route {expected_route}"
+        if approved_non_image2_route:
+            warnings.append(message)
+        else:
+            errors.append(message)
+    if expected_route and not approved_non_image2_route:
         bad_slide_routes = [
             f"{idx + 1}:{route}"
             for idx, route in enumerate(manifest_summary.get("slide_routes", []))

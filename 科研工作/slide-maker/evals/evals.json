@@ -1,0 +1,80 @@
+{
+  "skill_name": "slide maker",
+  "evals": [
+    {
+      "id": "customer_ppt_contents_revision",
+      "prompt": "[$slide maker] 我给你一个客户展厅方案 PPT。首页可以，目录页不像目录，而且 P1/P2 配图太像。请只重做目录页。",
+      "expected_output": "The agent should preserve the accepted cover, update style_spec/page_prompts for the rejected contents page, regenerate only slide 2, keep the visible title as 目录, and avoid reusing the cover hero scene or thumbnails.",
+      "files": [],
+      "assertions": [
+        "Does not regenerate or overwrite the accepted slide 1 unless explicitly asked.",
+        "Keeps the contents page title as 目录 and uses clear chapter navigation.",
+        "Adds a forbidden pattern for reusing the cover hero visual before regenerating.",
+        "Produces or updates a contact sheet for visual comparison."
+      ]
+    },
+    {
+      "id": "customer_ppt_full_imagegen_continue",
+      "prompt": "[$slide maker] P2 可以，继续做后面几页，还是全图像化，文字多的做信息图。",
+      "expected_output": "The agent should continue from the existing image_manifest, generate only missing slides, inspect each generated candidate before capture, reject obvious repeated hero scenes, then build and validate an image-deck PPTX.",
+      "files": [],
+      "assertions": [
+        "Starts from the existing manifest rather than restarting the deck.",
+        "Uses builtin-start, image_gen, and builtin-capture for each missing slide in membership mode.",
+        "Rejects generated slides that repeat the cover hero scene or add fake slogans/logos.",
+        "Runs validate_authoring, build_image_deck, validate_image_deck, and PPTX package integrity checks."
+      ]
+    },
+    {
+      "id": "formal_customer_copy_and_logo_boundary",
+      "prompt": "[$slide maker] 这个正式汇报 PPT 要稳重高级，文字不要乱提炼，封面不要放 logo，除非是真 logo。",
+      "expected_output": "The agent should treat 'more premium' as stable formal report design, preserve source copy deliberately, avoid fake logos, and either use Image2-visible short source text or an explicit deterministic text fallback if exact visible copy is required.",
+      "files": [],
+      "assertions": [
+        "Interprets premium as mature and formal, not trendy poster styling.",
+        "Does not invent a customer logo or brand mark.",
+        "Preserves source text in visible infographic elements or notes/source_map.",
+        "If exact visible text is required, records explicit non-Image2 fallback approval before deterministic text rendering."
+      ]
+    },
+    {
+      "id": "customer_ppt_sample_gate_real_redesign",
+      "prompt": "[$slide maker] 先做这个客户 PPT 前 3 页，企业色偏国网绿。要亮堂、有发布会和杂志风设计感，不要只是换色，版式和构图也要重新设计。",
+      "expected_output": "The agent should load the customer PPT polish SOP, create a sample-first workflow, define a brand/style lock, redesign each of the first three page roles with distinct composition, and produce a contact sheet for approval before continuing.",
+      "files": [],
+      "assertions": [
+        "Loads references/customer_ppt_polish.md for customer PPT polish.",
+        "Creates a 3-page sample plan before full-deck generation.",
+        "States how each page composition changes, not only the palette.",
+        "Uses brand green as a disciplined system while keeping the deck bright and formal.",
+        "Produces a contact sheet or rendered preview for approval before continuing."
+      ]
+    },
+    {
+      "id": "customer_ppt_dense_copy_to_infographic",
+      "prompt": "[$slide maker] 我同事说文字不能你自己提炼，PPT 里面有的小字也要想办法保留。文字多的页面可以做成信息图或资讯图，但要看起来像 image-gen 设计过。",
+      "expected_output": "The agent should build a per-slide source copy map, keep source wording as the authority, turn dense body copy into visible infographic labels/cards/matrices where possible, and only move long details to notes/source_map with clear traceability.",
+      "files": [],
+      "assertions": [
+        "Creates or describes a page-level copy map with source_title/source_body_copy/must_visible/can_visualize/notes_only.",
+        "Does not paraphrase or summarize customer copy unless explicitly asked.",
+        "Uses infographic forms such as information cards, matrices, tag rows, journey maps, or annotated scenes for dense slides.",
+        "Keeps exact long details in speaker notes/source_map when not visible.",
+        "Does not switch to local deterministic rendering unless exact text fidelity is explicitly approved."
+      ]
+    },
+    {
+      "id": "customer_ppt_colleague_handoff",
+      "prompt": "[$slide maker] 把我们这套客户 PPT 美化方法整理成别人也能照着做的交付流程。后续同事拿到一个正式客户稿，也要能做出同样质量。",
+      "expected_output": "The agent should route to customer_ppt_polish, document the sample-first workflow, source-copy policy, page-role grammar, lock/regenerate rules, QA evidence, and handoff checklist instead of only giving broad design advice.",
+      "files": [],
+      "assertions": [
+        "References or updates a reusable SOP rather than only answering in chat.",
+        "Includes source-copy preservation, page-role grammar, and sample gating.",
+        "Defines lock approved pages and regenerate rejected pages as an operational rule.",
+        "Includes contact sheet, QA report, manifest, and package validation as delivery evidence.",
+        "Mentions image deck editability and Image2 Chinese text fidelity as risks."
+      ]
+    }
+  ]
+}
